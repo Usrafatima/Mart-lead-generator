@@ -115,7 +115,7 @@ mart-lead-generator/
 ## 1. Clone Repository
 
 ```bash
-git clone https://github.com/your-username/mart-lead-generator.git
+git clone [https://github.com/Usrafatima/Mart-lead-generator]
 
 cd mart-lead-generator
 ```
