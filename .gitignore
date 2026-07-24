@@ -1,0 +1,18 @@
+# Python
+backend/venv/
+backend/__pycache__/
+*.pyc
+
+# Environment
+.env
+.env.local
+
+# Next.js build files (sirf yeh ignore karo, pura frontend nahi)
+frontend/.next/
+frontend/node_modules/
+frontend/out/
+frontend/.env*.local
+
+# Others
+.DS_Store
+__pycache__/
