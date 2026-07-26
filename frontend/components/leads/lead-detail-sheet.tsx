@@ -232,7 +232,10 @@ export function LeadDetailSheet({ lead, open, onOpenChange, onUpdate }: LeadDeta
                 {isEditing ? (
                   <Select
                     value={formData.lead_priority}
-                    onValueChange={(v) => setFormData((prev) => ({ ...prev, lead_priority: v }))}
+                    onValueChange={(v) => {
+                      if (v === null) return
+                      setFormData((prev) => ({ ...prev, lead_priority: v as Lead["lead_priority"] }))
+                    }}
                   >
                     <SelectTrigger>
                       <SelectValue />

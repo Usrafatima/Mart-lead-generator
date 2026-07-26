@@ -1,6 +1,7 @@
 import type { Metadata } from "next"
 import { Geist, Geist_Mono } from "next/font/google"
 import { ThemeProvider } from "@/lib/theme-provider"
+import { AuthProvider } from "@/lib/auth-context"
 import { TooltipProvider } from "@/components/ui/tooltip"
 import { Toaster } from "@/components/ui/sonner"
 import "./globals.css"
@@ -33,10 +34,12 @@ export default function RootLayout({
     >
       <body className="min-h-screen bg-background font-sans antialiased">
         <ThemeProvider>
-          <TooltipProvider>
-            {children}
-            <Toaster richColors position="top-right" />
-          </TooltipProvider>
+          <AuthProvider>
+            <TooltipProvider>
+              {children}
+              <Toaster richColors position="top-right" />
+            </TooltipProvider>
+          </AuthProvider>
         </ThemeProvider>
       </body>
     </html>

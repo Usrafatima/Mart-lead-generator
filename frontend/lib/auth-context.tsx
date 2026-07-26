@@ -2,7 +2,6 @@
 
 import { createContext, useContext, useState, useEffect, useCallback, type ReactNode } from "react"
 import { useRouter } from "next/navigation"
-import { authApi } from "./api-client"
 import type { User } from "@/types"
 
 interface AuthContextType {
@@ -17,6 +16,11 @@ interface AuthContextType {
 
 const AuthContext = createContext<AuthContextType | undefined>(undefined)
 
+// Storage keys
+const STORAGE_KEY_USER = "leadflow_user"
+const STORAGE_KEY_TOKEN = "leadflow_token"
+const STORAGE_KEY_USERS = "leadflow_users" // Store registered users
+
 export function AuthProvider({ children }: { children: ReactNode }) {
   const [user, setUser] = useState<User | null>(null)
   const [token, setToken] = useState<string | null>(null)
@@ -27,46 +31,88 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
   // Restore session on mount
   useEffect(() => {
-    const storedToken = localStorage.getItem("auth_token")
-    const storedUser = localStorage.getItem("auth_user")
+    const storedToken = localStorage.getItem(STORAGE_KEY_TOKEN)
+    const storedUser = localStorage.getItem(STORAGE_KEY_USER)
 
     if (storedToken && storedUser) {
       setToken(storedToken)
       try {
         setUser(JSON.parse(storedUser))
       } catch {
-        localStorage.removeItem("auth_token")
-        localStorage.removeItem("auth_user")
+        localStorage.removeItem(STORAGE_KEY_TOKEN)
+        localStorage.removeItem(STORAGE_KEY_USER)
       }
     }
     setIsLoading(false)
   }, [])
 
   const login = useCallback(async (email: string, password: string) => {
-    const response = await authApi.login(email, password)
-    const { access_token, user: userData } = response.data
+    // Get registered users from localStorage
+    const usersJson = localStorage.getItem(STORAGE_KEY_USERS)
+    const users: Record<string, { name: string; password: string }> = usersJson ? JSON.parse(usersJson) : {}
 
-    localStorage.setItem("auth_token", access_token)
-    localStorage.setItem("auth_user", JSON.stringify(userData))
+    // Check if user exists
+    const existingUser = users[email.toLowerCase()]
+    if (!existingUser) {
+      throw new Error("No account found with this email. Please sign up first.")
+    }
 
-    setToken(access_token)
+    // Check password
+    if (existingUser.password !== password) {
+      throw new Error("Invalid password. Please try again.")
+    }
+
+    // Create session
+    const newToken = "dummy_token_" + Date.now()
+    const userData: User = {
+      id: "user_" + Date.now(),
+      name: existingUser.name,
+      email: email.toLowerCase(),
+      role: "admin",
+      created_at: new Date().toISOString(),
+    }
+
+    localStorage.setItem(STORAGE_KEY_TOKEN, newToken)
+    localStorage.setItem(STORAGE_KEY_USER, JSON.stringify(userData))
+    setToken(newToken)
     setUser(userData)
   }, [])
 
   const register = useCallback(async (name: string, email: string, password: string) => {
-    const response = await authApi.register(name, email, password)
-    const { access_token, user: userData } = response.data
+    // Get existing users
+    const usersJson = localStorage.getItem(STORAGE_KEY_USERS)
+    const users: Record<string, { name: string; password: string }> = usersJson ? JSON.parse(usersJson) : {}
 
-    localStorage.setItem("auth_token", access_token)
-    localStorage.setItem("auth_user", JSON.stringify(userData))
+    const emailLower = email.toLowerCase()
 
-    setToken(access_token)
+    // Check if already registered
+    if (users[emailLower]) {
+      throw new Error("An account with this email already exists. Please login instead.")
+    }
+
+    // Save user
+    users[emailLower] = { name, password }
+    localStorage.setItem(STORAGE_KEY_USERS, JSON.stringify(users))
+
+    // Auto login after register
+    const newToken = "dummy_token_" + Date.now()
+    const userData: User = {
+      id: "user_" + Date.now(),
+      name,
+      email: emailLower,
+      role: "admin",
+      created_at: new Date().toISOString(),
+    }
+
+    localStorage.setItem(STORAGE_KEY_TOKEN, newToken)
+    localStorage.setItem(STORAGE_KEY_USER, JSON.stringify(userData))
+    setToken(newToken)
     setUser(userData)
   }, [])
 
   const logout = useCallback(() => {
-    localStorage.removeItem("auth_token")
-    localStorage.removeItem("auth_user")
+    localStorage.removeItem(STORAGE_KEY_TOKEN)
+    localStorage.removeItem(STORAGE_KEY_USER)
     setToken(null)
     setUser(null)
     router.push("/login")

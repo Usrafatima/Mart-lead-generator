@@ -6,7 +6,7 @@ import { LeadsTable } from "@/components/leads/leads-table"
 import { LeadsFilters } from "@/components/leads/leads-filters"
 import { CreateLeadDialog } from "@/components/leads/create-lead-dialog"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
-import { Users, RefreshCw } from "lucide-react"
+import { Users, RefreshCw, ListFilter } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import type { Lead } from "@/types"
 import { toast } from "sonner"
@@ -50,34 +50,37 @@ export default function LeadsPage() {
 
   return (
     <div className="space-y-6">
-      <div className="flex items-center justify-between">
+      {/* Page Header */}
+      <div className="flex flex-col gap-1 sm:flex-row sm:items-center sm:justify-between">
         <div>
           <h2 className="text-2xl font-bold tracking-tight">Leads</h2>
-          <p className="text-sm text-muted-foreground">
-            Manage and view all collected business leads
-          </p>
+          <p className="text-sm text-muted-foreground">Manage and view all collected business leads</p>
         </div>
-        <div className="flex items-center gap-2">
-          <Button variant="outline" size="icon" onClick={fetchLeads} disabled={isLoading}>
+        <div className="flex items-center gap-2 mt-2 sm:mt-0">
+          <Button variant="outline" size="icon" onClick={fetchLeads} disabled={isLoading} className="h-9 w-9">
             <RefreshCw className={`h-4 w-4 ${isLoading ? "animate-spin" : ""}`} />
           </Button>
           <CreateLeadDialog onSuccess={fetchLeads} />
         </div>
       </div>
 
-      <Card>
-        <CardHeader className="pb-3">
-          <CardTitle className="flex items-center gap-2 text-lg font-medium">
-            <Users className="h-5 w-5 text-muted-foreground" />
+      {/* Content Card */}
+      <Card className="border shadow-sm overflow-hidden">
+        <CardHeader className="border-b bg-muted/20 pb-3">
+          <CardTitle className="flex items-center gap-2 text-base font-semibold">
+            <div className="flex h-7 w-7 items-center justify-center rounded-lg bg-primary/10">
+              <Users className="h-4 w-4 text-primary" />
+            </div>
             All Leads
             {!isLoading && (
-              <span className="ml-auto text-sm font-normal text-muted-foreground">
+              <span className="ml-auto inline-flex items-center gap-1.5 rounded-full bg-primary/5 px-3 py-1 text-xs font-medium text-primary">
+                <ListFilter className="h-3 w-3" />
                 {leads.length} lead{leads.length !== 1 ? "s" : ""}
               </span>
             )}
           </CardTitle>
         </CardHeader>
-        <CardContent>
+        <CardContent className="p-4 sm:p-6">
           <div className="space-y-4">
             <LeadsFilters
               search={search}

@@ -5,6 +5,7 @@ import { usePathname } from "next/navigation"
 import { cn } from "@/lib/utils"
 import { Button } from "@/components/ui/button"
 import { ScrollArea } from "@/components/ui/scroll-area"
+import { useAuth } from "@/lib/auth-context"
 import {
   LayoutDashboard,
   Users,
@@ -14,6 +15,8 @@ import {
   Store,
   ChevronLeft,
   ChevronRight,
+  Sparkles,
+  LogOut,
 } from "lucide-react"
 import { useState } from "react"
 
@@ -67,32 +70,38 @@ const sidebarLinks = [
 
 export function Sidebar() {
   const pathname = usePathname()
+  const { logout, user } = useAuth()
   const [collapsed, setCollapsed] = useState(false)
 
   return (
     <aside
       className={cn(
-        "flex flex-col border-r bg-card transition-all duration-300",
+        "flex flex-col border-r bg-card transition-all duration-300 ease-in-out",
         collapsed ? "w-16" : "w-64"
       )}
     >
       {/* Logo */}
       <div className="flex h-16 items-center gap-3 border-b px-4">
-        <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-primary">
-          <Store className="h-4 w-4 text-primary-foreground" />
+        <div className="relative flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-linear-to-br from-primary to-primary/60 shadow-sm shadow-primary/20">
+          <Store className="h-5 w-5 text-primary-foreground" />
         </div>
         {!collapsed && (
-          <span className="text-base font-semibold tracking-tight">LeadGenerator</span>
+          <div className="flex items-center gap-1.5">
+            <span className="text-lg font-bold tracking-tight bg-linear-to-r from-foreground to-foreground/70 bg-clip-text">
+              LeadFlow
+            </span>
+            <Sparkles className="h-3.5 w-3.5 text-primary/60" />
+          </div>
         )}
       </div>
 
       {/* Navigation */}
-      <ScrollArea className="flex-1 px-3 py-4">
-        <nav className="flex flex-col gap-6">
+      <ScrollArea className="flex-1 px-3 py-5">
+        <nav className="flex flex-col gap-7">
           {sidebarLinks.map((group) => (
             <div key={group.group}>
               {!collapsed && (
-                <p className="mb-2 px-2 text-xs font-medium text-muted-foreground uppercase tracking-wider">
+                <p className="mb-2.5 px-3 text-xs font-semibold text-muted-foreground uppercase tracking-[0.12em]">
                   {group.group}
                 </p>
               )}
@@ -107,13 +116,21 @@ export function Sidebar() {
                       <Link
                         href={item.href}
                         className={cn(
-                          "flex items-center gap-3 rounded-lg px-3 py-2.5 text-sm font-medium transition-colors",
+                          "group relative flex items-center gap-3 rounded-xl px-3 py-2.5 text-sm font-medium transition-all duration-200",
                           isActive
-                            ? "bg-primary/10 text-primary"
-                            : "text-muted-foreground hover:bg-accent hover:text-accent-foreground"
+                            ? "bg-linear-to-r from-primary/10 to-primary/5 text-primary shadow-sm"
+                            : "text-muted-foreground hover:bg-accent/60 hover:text-accent-foreground"
                         )}
                       >
-                        <item.icon className="h-4 w-4 shrink-0" />
+                        {isActive && (
+                          <span className="absolute left-0 top-1/2 h-5 w-1 -translate-y-1/2 rounded-full bg-primary" />
+                        )}
+                        <item.icon
+                          className={cn(
+                            "h-4.5 w-4.5 shrink-0 transition-transform duration-200",
+                            isActive ? "text-primary" : "group-hover:scale-105"
+                          )}
+                        />
                         {!collapsed && <span>{item.title}</span>}
                       </Link>
                     </li>
@@ -125,21 +142,36 @@ export function Sidebar() {
         </nav>
       </ScrollArea>
 
-      {/* Bottom: collapse toggle */}
+      {/* Bottom - User & Logout */}
       <div className="border-t p-3">
-        <Button
-          variant="ghost"
-          size="sm"
-          className="w-full justify-start text-muted-foreground hover:text-foreground"
-          onClick={() => setCollapsed(!collapsed)}
-        >
-          {collapsed ? (
-            <ChevronRight className="h-4 w-4 shrink-0" />
-          ) : (
-            <ChevronLeft className="h-4 w-4 shrink-0" />
-          )}
-          {!collapsed && <span className="ml-2">Collapse</span>}
-        </Button>
+        {!collapsed && user && (
+          <div className="mb-2 px-2">
+            <p className="text-sm font-semibold truncate">{user.name}</p>
+            <p className="text-xs text-muted-foreground truncate">{user.email}</p>
+          </div>
+        )}
+        <div className="flex items-center gap-1">
+          <Button
+            variant="ghost"
+            size="sm"
+            className={cn(
+              "flex-1 justify-start gap-3 rounded-xl text-muted-foreground hover:text-destructive hover:bg-destructive/5 transition-all",
+              collapsed && "justify-center px-0"
+            )}
+            onClick={logout}
+          >
+            <LogOut className="h-4 w-4 shrink-0" />
+            {!collapsed && <span>Logout</span>}
+          </Button>
+          <Button
+            variant="ghost"
+            size="icon"
+            className="h-8 w-8 shrink-0 rounded-xl text-muted-foreground hover:text-foreground"
+            onClick={() => setCollapsed(!collapsed)}
+          >
+            {collapsed ? <ChevronRight className="h-4 w-4" /> : <ChevronLeft className="h-4 w-4" />}
+          </Button>
+        </div>
       </div>
     </aside>
   )
