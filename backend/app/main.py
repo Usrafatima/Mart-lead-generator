@@ -3,6 +3,8 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from app.api.v1 import auth, businesses, leads
 from app.api.v1.api import api_router
+from app.api.v1 import exports  # Database & Sheets module: CSV + Google Sheets export
+from app.api.v1 import reports  # Database & Sheets module: weekly dashboard
 
 app = FastAPI(
     title="Lead Generation System - Backend API",
@@ -22,6 +24,8 @@ app.add_middleware(
 app.include_router(auth.router)
 app.include_router(businesses.router)
 app.include_router(leads.router)
+app.include_router(exports.router)
+app.include_router(reports.router)
 app.include_router(api_router)
 
 
