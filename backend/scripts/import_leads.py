@@ -1,9 +1,13 @@
-"""
-Load a lead sheet (.csv / .xlsx) into PostgreSQL.
 
-    python -m scripts.import_leads data/sample_leads.csv
-    python -m scripts.import_leads "C:/path/to/Bristol_Dubai.xlsx" --assigned-to Haifa
-    python -m scripts.import_leads data/sample_leads.csv --dry-run
+"""
+One-off migration: load an existing lead sheet (.csv / .xlsx) into PostgreSQL.
+
+This is not part of the normal flow — leads come from the discovery bot
+(scripts/discover_leads.py). This exists so spreadsheet work done before the
+system existed isn't thrown away.
+
+    python -m scripts.import_leads "C:/path/to/old_leads.xlsx" --assigned-to Haifa
+    python -m scripts.import_leads old_leads.csv --dry-run
 
 Run from the backend/ directory. Safe to re-run: rows are matched against
 existing businesses and merged rather than duplicated.

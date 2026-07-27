@@ -14,7 +14,6 @@ from app.services.importer import (
     import_rows,
 )
 
-SAMPLE_CSV = Path(__file__).resolve().parents[1] / "data" / "sample_leads.csv"
 
 
 def _row(**overrides) -> dict:
@@ -168,22 +167,32 @@ def test_assigned_to_override_tags_every_row(db):
     assert db.query(Business).one().assigned_to == "Haifa"
 
 
-@pytest.mark.skipif(not SAMPLE_CSV.exists(), reason="sample_leads.csv not present")
-def test_sample_csv_imports_cleanly(db):
-    summary = import_file(db, SAMPLE_CSV, assigned_to="Haifa")
+def test_csv_file_imports_cleanly(db, sheet_csv):
+    path = sheet_csv(
+        _row(**{"Lead ID": "1", "Business Name": "Wai Yee Hong", "City": "Bristol"}),
+        _row(**{"Lead ID": "2", "Business Name": "Organic Foods & Café", "City": "Dubai",
+                "Country": "United Arab Emirates", "Phone Number": "+971 4 338 2911"}),
+    )
 
-    # 15 rows from the Bristol + Dubai sheet, all distinct businesses.
-    assert summary["created"] == 15
+    summary = import_file(db, path, assigned_to="Haifa")
+
+    assert summary["created"] == 2
     assert summary["skipped"] == 0
-    assert db.query(Business).filter(Business.city == "Bristol").count() == 8
-    assert db.query(Business).filter(Business.city == "Dubai").count() == 7
+    assert db.query(Business).filter(Business.city == "Bristol").count() == 1
+    assert db.query(Business).filter(Business.city == "Dubai").count() == 1
 
 
-@pytest.mark.skipif(not SAMPLE_CSV.exists(), reason="sample_leads.csv not present")
-def test_sample_csv_round_trips_to_export(db):
+def test_csv_round_trips_back_out_to_export(db, sheet_csv):
     from app.services.csv_export import leads_to_csv, query_leads_for_export
 
-    import_file(db, SAMPLE_CSV, assigned_to="Haifa")
+    path = sheet_csv(
+        _row(**{"Business Name": "Wai Yee Hong Chinese Supermarket"}),
+        # Non-ASCII must survive the round trip; the sheets contain accented
+        # and Arabic business names.
+        _row(**{"Business Name": "Organic Foods & Café", "Phone Number": "+971 4 338 2911"}),
+    )
+
+    import_file(db, path, assigned_to="Haifa")
     output = leads_to_csv(query_leads_for_export(db))
 
     assert "Wai Yee Hong Chinese Supermarket" in output

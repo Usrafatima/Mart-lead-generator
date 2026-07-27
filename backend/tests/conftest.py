@@ -71,6 +71,30 @@ def db(_patch_uuid_for_sqlite):
 
 
 @pytest.fixture()
+def sheet_csv(tmp_path):
+    """
+    Write rows to a throwaway .csv and return its path.
+
+    Tests build their own input rather than depending on a checked-in
+    spreadsheet: the real sheets were one-off migration data and don't belong
+    in the repo, but the parsing behaviour they exposed still needs covering.
+    """
+    import csv as _csv
+
+    def _write(*rows: dict, name: str = "sheet.csv"):
+        path = tmp_path / name
+        # utf-8-sig matches what Excel produces, so the BOM-stripping in
+        # read_sheet() is exercised too.
+        with path.open("w", newline="", encoding="utf-8-sig") as handle:
+            writer = _csv.DictWriter(handle, fieldnames=list(rows[0]))
+            writer.writeheader()
+            writer.writerows(rows)
+        return path
+
+    return _write
+
+
+@pytest.fixture()
 def make_business():
     """Build an unsaved Business with sensible defaults."""
     from app.models.business import Business

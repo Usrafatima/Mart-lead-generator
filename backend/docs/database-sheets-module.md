@@ -207,59 +207,35 @@ it would have written, instead of crash-looping in Celery. See
 
 ---
 
-## Importing an existing sheet
+## Importing an existing sheet (one-off migration)
+
+**This is not how the system runs.** Leads come from the discovery bot; this
+exists only to carry across work done in spreadsheets before the system
+existed, so none of it is lost.
 
 ```bash
 cd backend
-python -m scripts.import_leads data/sample_leads.csv --assigned-to Haifa
-python -m scripts.import_leads "C:/path/to/Bristol_Dubai.xlsx" --assigned-to Haifa
-python -m scripts.import_leads data/sample_leads.csv --dry-run   # parse, don't save
+python -m scripts.import_leads "C:/path/to/old_leads.xlsx" --assigned-to Haifa
+python -m scripts.import_leads old_leads.csv --dry-run   # parse, don't save
 ```
 
 Rows go through `upsert_business()`, so re-importing the same file — or
-importing two interns' sheets that overlap — merges instead of duplicating.
-Headers are matched case-insensitively with common variants aliased, and
-`"N/A"` / `"Not Available"` become NULL rather than literal strings.
+importing two people's sheets that overlap — merges instead of duplicating.
+Headers are matched case-insensitively with common variants aliased.
 
-`data/` holds every intern's sheet collected so far:
+No spreadsheets are kept in the repo. The parsing quirks the team's real
+sheets exposed are pinned down in `tests/test_sheet_cleaning.py` instead:
 
-| File | Intern | Cities | Rows |
-|---|---|---|---|
-| `sample_leads.csv` | Haifa | Bristol, Dubai | 15 |
-| `leads_inza_london_dammam.csv` | Inza | London | 5 (partial) |
-| `leads_abdulbasit_manchester_leeds.csv` | Abdul Basit | Manchester, Leeds | 16 |
-| `leads_usman_islamabad_rawalpindi.csv` | Usman | Islamabad, Rawalpindi | 16 |
-| `leads_aiza_lahore_faisalabad.csv` | Aiza | Lahore, Faisalabad | 16 |
-
-Load them all:
-
-```bash
-python -m scripts.import_leads data/sample_leads.csv --assigned-to Haifa
-python -m scripts.import_leads data/leads_inza_london_dammam.csv --assigned-to Inza
-python -m scripts.import_leads data/leads_abdulbasit_manchester_leeds.csv --assigned-to "Abdul Basit"
-python -m scripts.import_leads data/leads_usman_islamabad_rawalpindi.csv --assigned-to Usman
-python -m scripts.import_leads data/leads_aiza_lahore_faisalabad.csv --assigned-to Aiza
-```
-
-That yields **65 businesses** — 68 rows minus the shared `ABC Mart` template
-row, which appears in four sheets and collapses to one lead.
-
-Still missing: Fajar (Birmingham, Liverpool), Fatima (Abu Dhabi, Sharjah),
-Kristina (Karachi, Riyadh), and Inza's Dammam half.
-
-### Known data problems in the source sheets
-
-The importer handles these rather than failing, but they're worth fixing at
-source:
-
-| Problem | Where | Handling |
-|---|---|---|
-| Phones mangled to `4.41317E+11` | Abdul Basit, Inza | Imported blank — the digits are unrecoverable and a wrong number is worse than none. Re-enter the column as **text** in Excel. |
-| One phone on two different shops | Usman (C-Mart / Save Mart) | Not merged, thanks to the name-corroboration guard |
-| `nan`, `To Verify`, `unkown`, `—`, `Not listed` | all sheets | Treated as blank |
-| Week written as `30`, `52`, `Week 1`, `week1` | all sheets | Normalised to an integer |
-| Review counts as `120+`, `800+` | Abdul Basit | Parsed as the number |
-| Lead IDs as `L-LON-001` | Inza | Ignored; the database assigns its own sequential Lead ID |
+| Problem seen in real sheets | Handling |
+|---|---|
+| Phones mangled by Excel to `4.41317E+11` | Imported blank. The digits are unrecoverable, and a wrong number looks callable and lets dedup match unrelated shops. Format phone columns as **Text** before typing. |
+| One phone typed against two different shops | Not merged, thanks to the name-corroboration guard |
+| `nan`, `To Verify`, `unkown`, `—`, `Not listed`, `TBD` | Treated as blank, not stored as text |
+| Week written as `30`, `52`, `Week 1`, `week1` | Normalised to an integer |
+| Review counts as `120+`, `800+` | Parsed as the number |
+| Lead IDs as `L-LON-001` | Ignored; the database assigns its own |
+| `Contacted – Interested` (en dash), `Attempted – No Answer` | Mapped to the right status |
+| `Manual (likely)`, `Semi-Automated?` | Mapped to the right status |
 
 ---
 
@@ -270,8 +246,13 @@ cd backend
 cp .env.example .env
 docker compose up -d db redis
 alembic upgrade head
-python -m scripts.import_leads data/sample_leads.csv --assigned-to Haifa
 uvicorn app.main:app --reload
+```
+
+Populate it by discovering leads, not by importing a sheet:
+
+```bash
+python -m scripts.discover_leads --city Bristol --category "mini mart"
 ```
 
 Tests need no services running — they use in-memory SQLite:
