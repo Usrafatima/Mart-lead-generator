@@ -28,6 +28,14 @@ class Settings(BaseSettings):
     # Database & Sheets module, but the backend needs the id to trigger jobs) ---
     GOOGLE_SHEETS_SPREADSHEET_ID: str = ""
     GOOGLE_SERVICE_ACCOUNT_JSON_PATH: str = ""
+    # Tab the weekly export writes to.
+    GOOGLE_SHEETS_WORKSHEET: str = "Leads"
+    # Separate tab for the weekly dashboard, which is fully rebuilt each run.
+    GOOGLE_SHEETS_DASHBOARD_WORKSHEET: str = "Weekly Dashboard"
+    # Force the export to log rows instead of writing them. Leave False: the
+    # export already falls back to dry run on its own when credentials are
+    # missing. This is for deliberately rehearsing a run against a real setup.
+    SHEETS_DRY_RUN: bool = False
 
 
 settings = Settings()

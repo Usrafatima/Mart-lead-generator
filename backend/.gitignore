@@ -10,3 +10,11 @@ venv/
 
 # Alembic (keep migrations, ignore local sqlite test dbs)
 *.sqlite3
+
+# Google service account key (Database & Sheets module).
+# This grants write access to any spreadsheet it's shared with — never commit it.
+secrets/
+*service_account*.json
+
+# Pytest
+.pytest_cache/
