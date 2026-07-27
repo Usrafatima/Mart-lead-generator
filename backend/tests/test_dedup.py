@@ -162,6 +162,41 @@ def test_fuzzy_name_match_within_city(db, make_business):
     assert find_duplicate(db, incoming) is not None
 
 
+def test_same_place_id_is_a_definitive_match(db, make_business):
+    upsert_business(db, make_business("Clifton Mini Market", place_id="0x4871:0x1b5d"))
+
+    # Name scraped differently on a later run, but Google says same place.
+    incoming = make_business("Clifton Premier Store", place_id="0x4871:0x1b5d")
+    assert find_duplicate(db, incoming) is not None
+
+
+def test_different_place_id_vetoes_a_name_match(db, make_business):
+    """
+    From a live Bristol scrape: Google returned "International Mini Market"
+    and "Albercik International mini Market" as separate places. Name
+    containment merged them, losing a real lead. Google's verdict wins.
+    """
+    upsert_business(
+        db, make_business("International Mini Market", place_id="0x48718fd8:0xfaf255e4")
+    )
+
+    incoming = make_business(
+        "Albercik International mini Market", place_id="0x48718aaa:0xbbbbcccc"
+    )
+    assert find_duplicate(db, incoming) is None
+
+
+def test_place_id_veto_does_not_block_hand_entered_rows(db, make_business):
+    # Sheet rows have no place_id, so a scraped record must still be able to
+    # match one — that's how manual and automated data get reconciled.
+    upsert_business(db, make_business("Clifton Mini Market", phone="+44 117 973 1444"))
+
+    incoming = make_business(
+        "Clifton Mini Market", phone="+44 117 973 1444", place_id="0x4871:0x1b5d"
+    )
+    assert find_duplicate(db, incoming) is not None
+
+
 def test_similar_but_distinct_names_are_not_merged(db, make_business):
     # "Better Food" and "Best Food" are different businesses in the sheet.
     upsert_business(db, make_business("Better Food", city="Bristol"))

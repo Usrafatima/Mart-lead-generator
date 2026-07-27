@@ -12,12 +12,14 @@ with common variants mapped (see _HEADER_ALIASES).
 
 from __future__ import annotations
 
-import csv
 import logging
 import re
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Iterable, Optional
+from typing import TYPE_CHECKING, Any, Iterable, Mapping, Optional
+
+if TYPE_CHECKING:  # pragma: no cover - typing only
+    import pandas as pd
 
 from sqlalchemy.orm import Session
 
@@ -236,6 +238,9 @@ _CALL_STATUS_ALIASES: dict[str, CallStatus] = {
     "not interested": CallStatus.not_interested,
     "no answer": CallStatus.no_answer,
     "no response": CallStatus.no_answer,
+    "attempted no answer": CallStatus.no_answer,
+    "attempted": CallStatus.no_answer,
+    "tried no answer": CallStatus.no_answer,
     "callback": CallStatus.callback_scheduled,
     "callback scheduled": CallStatus.callback_scheduled,
     "call back": CallStatus.callback_scheduled,
@@ -353,8 +358,13 @@ def _split_social(value: Any) -> dict[str, Optional[str]]:
     return result
 
 
-def _normalize_headers(row: dict) -> dict:
-    """Rename a raw sheet row's keys to model field names."""
+def _normalize_headers(row: Mapping) -> dict:
+    """
+    Rename a raw sheet row's keys to model field names.
+
+    Accepts a plain dict or a pandas Series, so callers can pass a DataFrame
+    row directly.
+    """
     normalized: dict[str, Any] = {}
     for raw_key, value in row.items():
         if raw_key is None:
@@ -365,7 +375,7 @@ def _normalize_headers(row: dict) -> dict:
     return normalized
 
 
-def import_row(db: Session, raw_row: dict, *, assigned_to: Optional[str] = None) -> tuple[Optional[Lead], bool]:
+def import_row(db: Session, raw_row: Mapping, *, assigned_to: Optional[str] = None) -> tuple[Optional[Lead], bool]:
     """
     Import one sheet row.
 
@@ -423,7 +433,7 @@ def import_row(db: Session, raw_row: dict, *, assigned_to: Optional[str] = None)
 
 def import_rows(
     db: Session,
-    rows: Iterable[dict],
+    rows: Iterable[Mapping],
     *,
     assigned_to: Optional[str] = None,
     commit: bool = True,
@@ -448,13 +458,18 @@ def import_rows(
     return summary
 
 
-def import_file(db: Session, path: str | Path, *, assigned_to: Optional[str] = None) -> dict:
+def read_sheet(path: str | Path) -> "pd.DataFrame":
     """
-    Import a .csv or .xlsx file.
+    Load a .csv or .xlsx lead sheet into a DataFrame.
 
-    Excel support needs openpyxl; CSV works with the stdlib alone, so a
-    missing optional dependency only blocks the Excel path.
+    Everything is read as text (`dtype=str`). Pandas would otherwise infer
+    types per column, and on these sheets that does real damage: a phone
+    column becomes float and "+44 117 952 4240" turns into scientific
+    notation, which is exactly the corruption we're trying to survive.
+    Conversion happens later, per field, in the _to_* helpers.
     """
+    import pandas as pd
+
     path = Path(path)
     if not path.exists():
         raise FileNotFoundError(f"No such file: {path}")
@@ -464,24 +479,45 @@ def import_file(db: Session, path: str | Path, *, assigned_to: Optional[str] = N
     if suffix == ".csv":
         # utf-8-sig strips the BOM Excel writes, which would otherwise corrupt
         # the first header ("﻿Lead ID") and break the alias lookup.
-        with path.open(newline="", encoding="utf-8-sig") as handle:
-            return import_rows(db, csv.DictReader(handle), assigned_to=assigned_to)
+        return pd.read_csv(path, dtype=str, keep_default_na=False, encoding="utf-8-sig")
 
     if suffix in {".xlsx", ".xlsm"}:
         try:
-            from openpyxl import load_workbook
+            return pd.read_excel(path, dtype=str, keep_default_na=False)
         except ImportError as exc:
             raise RuntimeError(
-                "Reading .xlsx needs openpyxl — run: pip install openpyxl "
+                "Reading .xlsx needs openpyxl — run: pip install -r requirements.txt "
                 "(or save the sheet as .csv and import that)"
             ) from exc
 
-        workbook = load_workbook(path, read_only=True, data_only=True)
-        sheet = workbook.active
-        row_iter = sheet.iter_rows(values_only=True)
-
-        headers = [str(h) if h is not None else "" for h in next(row_iter, [])]
-        rows = (dict(zip(headers, values)) for values in row_iter)
-        return import_rows(db, rows, assigned_to=assigned_to)
-
     raise ValueError(f"Unsupported file type {suffix!r} — use .csv or .xlsx")
+
+
+def import_dataframe(
+    db: Session,
+    frame: "pd.DataFrame",
+    *,
+    assigned_to: Optional[str] = None,
+    commit: bool = True,
+) -> dict:
+    """
+    Import a DataFrame of sheet rows.
+
+    Separate from read_sheet() so the same path serves a file on disk, a
+    spreadsheet pasted into the dashboard, or a frame built in a test.
+    """
+    # Drop rows that are entirely empty. Trailing blank lines are common in
+    # hand-maintained sheets and would otherwise be counted as skipped.
+    cleaned = frame.dropna(how="all")
+
+    return import_rows(
+        db,
+        (row for _, row in cleaned.iterrows()),
+        assigned_to=assigned_to,
+        commit=commit,
+    )
+
+
+def import_file(db: Session, path: str | Path, *, assigned_to: Optional[str] = None) -> dict:
+    """Import a .csv or .xlsx lead sheet."""
+    return import_dataframe(db, read_sheet(path), assigned_to=assigned_to)

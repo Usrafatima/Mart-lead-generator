@@ -27,7 +27,7 @@ from difflib import SequenceMatcher
 from typing import Iterable, Optional
 from urllib.parse import urlparse
 
-from sqlalchemy import text
+from sqlalchemy import or_, text
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session
 
@@ -236,9 +236,14 @@ def name_similarity(a: Optional[str], b: Optional[str]) -> float:
     return character_ratio
 
 
-def _fuzzy_candidates(db: Session, business: Business) -> Iterable[Business]:
+def _fuzzy_candidates(base_query, business: Business) -> Iterable[Business]:
     """
     Businesses in the same city whose name might be the same business.
+
+    Takes the caller's already-filtered query rather than building its own, so
+    every exclusion applied earlier — self, duplicates, the place_id veto —
+    still holds here. Building a fresh query was a bug: the veto was silently
+    bypassed and a live scrape merged two shops Google had marked distinct.
 
     Scoped to the city because a fuzzy scan across the whole table would be
     both slow and wrong — "Al Maya" in Dubai and "Al Maya" in Sharjah are
@@ -247,14 +252,7 @@ def _fuzzy_candidates(db: Session, business: Business) -> Iterable[Business]:
     if not business.name_key or not business.city:
         return []
 
-    query = db.query(Business).filter(
-        Business.city == business.city,
-        Business.is_duplicate.is_(False),
-    )
-    if business.id is not None:
-        query = query.filter(Business.id != business.id)
-
-    return query.all()
+    return base_query.filter(Business.city == business.city).all()
 
 
 def find_duplicate(db: Session, business: Business) -> Optional[Business]:
@@ -272,13 +270,22 @@ def find_duplicate(db: Session, business: Business) -> Optional[Business]:
     if business.id is not None:
         base = base.filter(Business.id != business.id)
 
-    # 0. Google's place_id is definitive when both records have one — it's
-    #    Google's own identifier for the physical location, so no heuristic
-    #    can beat it. Only the Maps bot supplies it.
+    # 0. Google's place_id is definitive, in both directions.
     if business.place_id:
         match = base.filter(Business.place_id == business.place_id).first()
         if match:
             return match
+
+        # A *different* place_id is positive evidence these are not the same
+        # business — Google has already decided they're separate locations,
+        # and no name heuristic of ours should overrule that. A live scrape of
+        # Bristol returned "International Mini Market" and "Albercik
+        # International mini Market" with distinct place_ids; without this
+        # veto, name containment merged them and lost a real lead.
+        # Records with no place_id (hand-entered sheet rows) stay eligible.
+        base = base.filter(
+            or_(Business.place_id.is_(None), Business.place_id == business.place_id)
+        )
 
     # 1. Phone, corroborated. A shared direct line is strong evidence, but it
     #    needs two guards learned from the real sheets:
@@ -315,7 +322,7 @@ def find_duplicate(db: Session, business: Business) -> Optional[Business]:
     # 4. Fuzzy name within the city.
     if name_key and business.city:
         best, best_score = None, 0.0
-        for candidate in _fuzzy_candidates(db, business):
+        for candidate in _fuzzy_candidates(base, business):
             score = name_similarity(name_key, candidate.name_key)
             if score > best_score:
                 best, best_score = candidate, score
@@ -445,8 +452,9 @@ def backfill_duplicates(db: Session, *, commit: bool = True) -> int:
 
 def _is_same(a: Business, b: Business) -> bool:
     """In-memory version of find_duplicate's rules, used by the backfill sweep."""
-    if a.place_id and a.place_id == b.place_id:
-        return True
+    if a.place_id and b.place_id:
+        # Definitive both ways — see the veto in find_duplicate().
+        return a.place_id == b.place_id
     if (
         a.phone_key
         and a.phone_key == b.phone_key

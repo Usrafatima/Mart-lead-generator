@@ -22,10 +22,12 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from datetime import date, datetime
-from typing import Optional
+from typing import TYPE_CHECKING, Optional
 
-from sqlalchemy import func
 from sqlalchemy.orm import Session
+
+if TYPE_CHECKING:  # pragma: no cover - typing only
+    import pandas as pd
 
 from app.core.assignments import (
     INTERNS,
@@ -131,6 +133,38 @@ def _attributed_intern(business: Business) -> Optional[str]:
     return business.assigned_to or intern_for_city(business.city)
 
 
+def leads_dataframe(db: Session) -> "pd.DataFrame":
+    """
+    Flatten the non-duplicate leads into a DataFrame for aggregation.
+
+    One query, then all the grouping happens in pandas. Columns are the few
+    the dashboard actually groups by, so the frame stays small even as the
+    lead count grows.
+    """
+    import pandas as pd
+
+    records = [
+        {
+            "week_number": lead.week_number,
+            "country": (business.country or "Unspecified").strip(),
+            "business_type": (business.business_type or "Unspecified").strip(),
+            "intern": _attributed_intern(business),
+        }
+        for lead, business in _base_query(db).all()
+    ]
+
+    # An explicit column list matters on the empty case: without it pandas
+    # returns a frame with no columns and every groupby below raises KeyError.
+    return pd.DataFrame(records, columns=["week_number", "country", "business_type", "intern"])
+
+
+def _counts(frame: "pd.DataFrame", column: str) -> dict[str, int]:
+    """Value counts for a column as a plain dict, empty frame included."""
+    if frame.empty:
+        return {}
+    return frame[column].value_counts().to_dict()
+
+
 def build_weekly_dashboard(
     db: Session,
     *,
@@ -140,19 +174,14 @@ def build_weekly_dashboard(
     """Assemble the dashboard for a given ISO week (defaults to the current one)."""
     week = week_number if week_number is not None else current_week_number()
 
-    rows = _base_query(db).all()
-    this_week = [(lead, business) for lead, business in rows if lead.week_number == week]
+    frame = leads_dataframe(db)
+    this_week = frame if frame.empty else frame[frame["week_number"] == week]
 
-    total_this_week = len(this_week)
+    total_this_week = int(len(this_week))
 
     # --- by country --------------------------------------------------------
-    week_by_country: dict[str, int] = {}
-    all_by_country: dict[str, int] = {}
-    for lead, business in rows:
-        country = (business.country or "Unspecified").strip()
-        all_by_country[country] = all_by_country.get(country, 0) + 1
-        if lead.week_number == week:
-            week_by_country[country] = week_by_country.get(country, 0) + 1
+    all_by_country = _counts(frame, "country")
+    week_by_country = _counts(this_week, "country")
 
     countries = list(TRACKED_COUNTRIES)
     # Include anything in the data that isn't on the tracked list, so a lead
@@ -162,42 +191,35 @@ def build_weekly_dashboard(
     by_country = [
         CountryRow(
             country=country,
-            leads_this_week=week_by_country.get(country, 0),
-            total_leads=all_by_country.get(country, 0),
+            leads_this_week=int(week_by_country.get(country, 0)),
+            total_leads=int(all_by_country.get(country, 0)),
         )
         for country in countries
     ]
 
     # --- by intern ---------------------------------------------------------
-    week_by_intern: dict[str, int] = {}
-    for lead, business in this_week:
-        intern = _attributed_intern(business)
-        if intern:
-            week_by_intern[intern] = week_by_intern.get(intern, 0) + 1
+    week_by_intern = _counts(this_week, "intern")
 
     target = per_intern_target(team_target)
     by_intern = [
         InternRow(
             intern=intern.name,
             cities=list(intern.cities),
-            leads_this_week=week_by_intern.get(intern.name, 0),
+            leads_this_week=int(week_by_intern.get(intern.name, 0)),
             target_per_week=target,
-            on_track=week_by_intern.get(intern.name, 0) >= target,
+            on_track=int(week_by_intern.get(intern.name, 0)) >= target,
         )
         for intern in INTERNS
     ]
 
     # --- by business type (all time) --------------------------------------
-    type_counts: dict[str, int] = {}
-    for _lead, business in rows:
-        label = (business.business_type or "Unspecified").strip()
-        type_counts[label] = type_counts.get(label, 0) + 1
+    type_counts = _counts(frame, "business_type")
 
     types = list(TRACKED_BUSINESS_TYPES)
     types += sorted(t for t in type_counts if t not in types)
 
     by_business_type = [
-        BusinessTypeRow(business_type=label, total_leads=type_counts.get(label, 0))
+        BusinessTypeRow(business_type=label, total_leads=int(type_counts.get(label, 0)))
         for label in types
     ]
 
