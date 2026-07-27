@@ -1,0 +1,12 @@
+# Environment secrets - never commit real secrets
+.env
+
+# Python
+__pycache__/
+*.pyc
+*.db
+venv/
+.venv/
+
+# Alembic (keep migrations, ignore local sqlite test dbs)
+*.sqlite3

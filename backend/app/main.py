@@ -1,38 +1,30 @@
-import logging
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
-from starlette.responses import JSONResponse
 
+from app.api.v1 import auth, businesses, leads
 from app.api.v1.api import api_router
 
-# Configure logging
-logging.basicConfig(level=logging.INFO)
-logger = logging.getLogger("uvicorn.error")
+app = FastAPI(
+    title="Lead Generation System - Backend API",
+    description="Auth for the frontend, and lead management/AI classification for the Lead Generation System.",
+    version="0.2.0",
+)
 
-app = FastAPI(title="Mart Lead Generator API", version="1.0.0")
-
-# CORS configuration - allow all origins (adjust for production)
+# Allow the Next.js frontend to call this API. Restrict origins in production.
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=["*"],  # TODO: replace with actual frontend URL before production
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
 
-# Health check endpoint
-@app.get("/health", tags=["Health"], response_class=JSONResponse)
-async def health_check():
-    """Simple health check endpoint used by orchestrators and load balancers."""
+app.include_router(auth.router)
+app.include_router(businesses.router)
+app.include_router(leads.router)
+app.include_router(api_router)
+
+
+@app.get("/health")
+def health_check():
     return {"status": "ok"}
-
-# Redirect root to docs
-from fastapi.responses import RedirectResponse
-
-@app.get("/", include_in_schema=False)
-async def redirect_to_docs():
-    return RedirectResponse(url="/docs")
-
-
-# Include versioned API router
-app.include_router(api_router, prefix="/api/v1")

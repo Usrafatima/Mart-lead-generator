@@ -1,39 +1,51 @@
-"""
-Pydantic schemas for Business leads.
-
-These mirror `app.bots.google_maps.BusinessLead` so the DB / API layer can
-validate and serialize scraped data consistently. Other scrapers (website,
-social media) can extend `BusinessBase` with their own optional fields.
-"""
-
+import uuid
+from datetime import datetime
 from typing import Optional
+from pydantic import BaseModel
 
-from pydantic import BaseModel, Field
 
-
-class BusinessBase(BaseModel):
+class BusinessCreate(BaseModel):
+    """Payload the Google Maps Discovery Bot sends for each new business found."""
     name: str
-    category: Optional[str] = None
+    city: str
     address: Optional[str] = None
-    city: Optional[str] = None
-    country: Optional[str] = None
     phone: Optional[str] = None
     website: Optional[str] = None
-    google_rating: Optional[float] = Field(default=None, ge=0, le=5)
-    reviews_count: Optional[int] = Field(default=None, ge=0)
-    maps_url: Optional[str] = None
-    place_id: Optional[str] = None
-    source: str = "google_maps"
+    rating: Optional[float] = None
+    source_bot: str = "google_maps_bot"
 
 
-class BusinessCreate(BusinessBase):
-    """Used when inserting a newly scraped business into the database."""
-    pass
+class BusinessContactEnrich(BaseModel):
+    """Payload the Website Scraper Bot sends to enrich an existing business."""
+    business_id: uuid.UUID
+    email: Optional[str] = None
+    contact_page_url: Optional[str] = None
 
 
-class BusinessResponse(BusinessBase):
-    """Used when returning a business record from the API."""
-    id: int
+class BusinessSocialEnrich(BaseModel):
+    """Payload the Social Media Scraper Bot sends to enrich an existing business."""
+    business_id: uuid.UUID
+    facebook_url: Optional[str] = None
+    instagram_url: Optional[str] = None
+    whatsapp_number: Optional[str] = None
+    linkedin_url: Optional[str] = None
+
+
+class BusinessOut(BaseModel):
+    id: uuid.UUID
+    name: str
+    city: str
+    address: Optional[str] = None
+    phone: Optional[str] = None
+    website: Optional[str] = None
+    email: Optional[str] = None
+    rating: Optional[float] = None
+    facebook_url: Optional[str] = None
+    instagram_url: Optional[str] = None
+    whatsapp_number: Optional[str] = None
+    linkedin_url: Optional[str] = None
+    is_duplicate: bool
+    created_at: datetime
 
     class Config:
         from_attributes = True
