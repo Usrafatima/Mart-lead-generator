@@ -7,6 +7,7 @@ __pycache__/
 *.db
 venv/
 .venv/
+.python-packages/
 
 # Alembic (keep migrations, ignore local sqlite test dbs)
 *.sqlite3

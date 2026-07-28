@@ -2,11 +2,10 @@ import uuid
 from datetime import datetime
 
 from sqlalchemy import Column, String, DateTime, Date, ForeignKey, Text, Enum, Integer, Sequence
-from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import relationship
 import enum
 
-from app.core.database import Base
+from app.core.database import Base, GUID
 
 
 class OrderMethod(str, enum.Enum):
@@ -52,8 +51,8 @@ class Lead(Base):
 
     __tablename__ = "leads"
 
-    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
-    business_id = Column(UUID(as_uuid=True), ForeignKey("businesses.id"), nullable=False, unique=True)
+    id = Column(GUID(), primary_key=True, default=uuid.uuid4)
+    business_id = Column(GUID(), ForeignKey("businesses.id"), nullable=False, unique=True)
 
     # Short sequential number shown as "Lead ID" in the sheet. UUIDs are
     # unusable for humans reading a spreadsheet, and this doubles as the stable
