@@ -133,6 +133,34 @@ def _attributed_intern(business: Business) -> Optional[str]:
     return business.assigned_to or intern_for_city(business.city)
 
 
+COUNTRY_ALIASES = {
+    "uk": "United Kingdom",
+    "united kingdom": "United Kingdom",
+    "great britain": "United Kingdom",
+    "england": "United Kingdom",
+    "uae": "United Arab Emirates",
+    "united arab emirates": "United Arab Emirates",
+    "pk": "Pakistan",
+    "pakistan": "Pakistan",
+    "saudi arabia": "Saudi Arabia",
+    "ksa": "Saudi Arabia",
+    "usa": "United States",
+    "us": "United States",
+    "united states": "United States",
+    "united states of america": "United States",
+}
+
+
+def _normalize_country(raw: Optional[str]) -> str:
+    if not raw:
+        return "Unspecified"
+    cleaned = raw.strip()
+    low = cleaned.lower()
+    if low in COUNTRY_ALIASES:
+        return COUNTRY_ALIASES[low]
+    return cleaned.title()
+
+
 def leads_dataframe(db: Session) -> "pd.DataFrame":
     """
     Flatten the non-duplicate leads into a DataFrame for aggregation.
@@ -146,7 +174,7 @@ def leads_dataframe(db: Session) -> "pd.DataFrame":
     records = [
         {
             "week_number": lead.week_number,
-            "country": (business.country or "Unspecified").strip(),
+            "country": _normalize_country(business.country),
             "business_type": (business.business_type or "Unspecified").strip(),
             "intern": _attributed_intern(business),
         }

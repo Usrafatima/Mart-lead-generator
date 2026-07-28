@@ -7,7 +7,7 @@ from sqlalchemy.orm import Session
 from app.core.database import get_db
 from app.deps import get_current_user
 from app.models.business import Business
-from app.models.lead import Lead
+from app.models.lead import Lead, AutomationStatus, OrderMethod
 from app.schemas.business import BusinessCreate, BusinessOut
 from app.schemas.lead import LeadOut
 from app.services.dedup import upsert_business
@@ -49,6 +49,18 @@ def create_business(
     """Manual/dashboard entry point that uses the same dedup path as the bots."""
     business = Business(**payload.model_dump())
     business, _ = upsert_business(db, business, commit=True)
+    lead = _ensure_lead(db, business)
+
+    if business.website and business.website.strip():
+        lead.automation_status = AutomationStatus.in_progress
+        lead.automation_status_detail = "Queued"
+        db.commit()
+        try:
+            from app.workers.celery_worker import enrich_website_task
+            enrich_website_task.delay(str(business.id))
+        except Exception:
+            pass
+
     return business
 
 
@@ -60,7 +72,7 @@ def list_businesses(
     db: Session = Depends(get_db),
     current_user=Depends(get_current_user),
 ):
-    """Used by the Next.js frontend to browse raw scraped businesses (before/without AI classification)."""
+    """Used by the Next.js frontend to browse raw scraped businesses."""
     query = db.query(Business)
     if city:
         query = query.filter(Business.city.ilike(f"%{city}%"))
@@ -82,8 +94,8 @@ async def enrich_business_from_website(
     current_user=Depends(get_current_user),
 ):
     """
-    Runs the website scraper for an existing business and stores useful contact
-    and social fields on the same Business row.
+    Runs the website scraper for an existing business and stores useful contact,
+    social, order method, and delivery fields on PostgreSQL.
     """
     business = db.query(Business).filter(Business.id == business_id).first()
     if not business:
@@ -91,22 +103,55 @@ async def enrich_business_from_website(
     if not business.website:
         raise HTTPException(status_code=400, detail="Business has no website to scrape")
 
+    lead = _ensure_lead(db, business)
+    lead.automation_status = AutomationStatus.in_progress
+    lead.automation_status_detail = "Processing"
+    db.commit()
+
     from app.bots.website_scraper.scraper import WebsiteScraper
 
     result = await WebsiteScraper().scrape(business.website)
     if result.get("status") != "success":
-        raise HTTPException(status_code=502, detail=result.get("error", "Website scrape failed"))
+        error_msg = result.get("error", "Website scrape failed")
+        lead.automation_status_detail = f"Failed ({error_msg[:40]})"
+        db.commit()
+        raise HTTPException(status_code=502, detail=error_msg)
 
     social = result.get("social_links") or {}
     _copy_if_blank(business, "email", _first(result.get("emails")))
     _copy_if_blank(business, "phone", _first(result.get("phones")))
-    _copy_if_blank(business, "address", result.get("address"))
+    _copy_if_blank(business, "owner_manager_name", result.get("owner_manager_name"))
     _copy_if_blank(business, "contact_page_url", result.get("contact_page"))
     _copy_if_blank(business, "facebook_url", social.get("facebook"))
     _copy_if_blank(business, "instagram_url", social.get("instagram"))
     _copy_if_blank(business, "linkedin_url", social.get("linkedin"))
     _copy_if_blank(business, "whatsapp_number", social.get("whatsapp"))
     business.set_derived_fields()
+
+    if result.get("order_method"):
+        try:
+            lead.order_method = OrderMethod(result.get("order_method"))
+        except ValueError:
+            lead.order_method = OrderMethod.online
+    if result.get("order_method_detail"):
+        lead.order_method_detail = result.get("order_method_detail")
+    if result.get("delivery_system"):
+        lead.delivery_system = result.get("delivery_system")
+
+    lead.priority = score_priority(business)
+
+    notes_items = []
+    if result.get("technologies"):
+        notes_items.append(f"Tech: {', '.join(result.get('technologies'))}")
+    if result.get("delivery_providers"):
+        notes_items.append(f"Delivery: {', '.join(result.get('delivery_providers'))}")
+    if result.get("owner_manager_name"):
+        notes_items.append(f"Owner/Manager: {result.get('owner_manager_name')}")
+    if notes_items:
+        lead.notes = " | ".join(notes_items)
+
+    lead.automation_status = AutomationStatus.completed
+    lead.automation_status_detail = "Completed"
 
     db.commit()
     db.refresh(business)
@@ -119,10 +164,7 @@ def score_business_as_lead(
     db: Session = Depends(get_db),
     current_user=Depends(get_current_user),
 ):
-    """
-    Creates/updates the Lead using the deterministic fallback scorer. The
-    external AI service can still overwrite richer classifications later.
-    """
+    """Creates/updates the Lead using the scoring logic."""
     business = db.query(Business).filter(Business.id == business_id).first()
     if not business:
         raise HTTPException(status_code=404, detail="Business not found")

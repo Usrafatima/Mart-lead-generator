@@ -1,12 +1,7 @@
 "use client";
 
-import { FormEvent, useCallback, useEffect, useMemo, useState } from "react";
-
-type User = {
-  full_name: string;
-  email: string;
-  role: "owner" | "member";
-};
+import { FormEvent, useCallback, useEffect, useState } from "react";
+import { useAuth, User } from "./context/AuthContext";
 
 type Business = {
   id: string;
@@ -19,6 +14,7 @@ type Business = {
   website?: string | null;
   website_available: boolean;
   email?: string | null;
+  owner_manager_name?: string | null;
   rating?: number | null;
   reviews_count?: number | null;
   contact_page_url?: string | null;
@@ -105,15 +101,8 @@ function priorityClass(priority: string) {
 }
 
 export default function Home() {
-  const [token, setToken] = useState(() => {
-    if (typeof window === "undefined") return "";
-    return localStorage.getItem("leadgen_token") || "";
-  });
-  const [user, setUser] = useState<User | null>(() => {
-    if (typeof window === "undefined") return null;
-    const savedUser = localStorage.getItem("leadgen_user");
-    return savedUser ? JSON.parse(savedUser) : null;
-  });
+  const { token, user, isLoading, login, logout, authFetch } = useAuth();
+
   const [authMode, setAuthMode] = useState<"login" | "signup">("login");
   const [authForm, setAuthForm] = useState({
     full_name: "Lead Manager",
@@ -139,26 +128,6 @@ export default function Home() {
   const [scrapeUrl, setScrapeUrl] = useState("https://example.com");
   const [scrapeResult, setScrapeResult] = useState<Record<string, unknown> | null>(null);
 
-  const headers = useMemo(
-    () => ({
-      "Content-Type": "application/json",
-      ...(token ? { Authorization: `Bearer ${token}` } : {}),
-    }),
-    [token],
-  );
-
-  const api = useCallback(async <T,>(path: string, init?: RequestInit): Promise<T> => {
-    const response = await fetch(`${API_BASE}${path}`, {
-      ...init,
-      headers: { ...headers, ...(init?.headers || {}) },
-    });
-    if (!response.ok) {
-      const text = await response.text();
-      throw new Error(text || `${response.status} ${response.statusText}`);
-    }
-    return response.json() as Promise<T>;
-  }, [headers]);
-
   const loadAll = useCallback(async () => {
     setLoading(true);
     try {
@@ -167,10 +136,10 @@ export default function Home() {
       if (filters.priority) query.set("priority", filters.priority);
 
       const [leadRows, businessRows, report, assignmentRows] = await Promise.all([
-        api<Lead[]>(`/api/v1/leads${query.toString() ? `?${query}` : ""}`),
-        api<Business[]>("/api/v1/businesses?limit=100"),
-        api<WeeklyDashboard>("/api/v1/reports/weekly"),
-        api<Assignments>("/api/v1/reports/assignments"),
+        authFetch<Lead[]>(`/api/v1/leads${query.toString() ? `?${query}` : ""}`),
+        authFetch<Business[]>("/api/v1/businesses?limit=100"),
+        authFetch<WeeklyDashboard>("/api/v1/reports/weekly"),
+        authFetch<Assignments>("/api/v1/reports/assignments"),
       ]);
 
       setLeads(leadRows);
@@ -183,15 +152,32 @@ export default function Home() {
     } finally {
       setLoading(false);
     }
-  }, [api, filters.city, filters.priority]);
+  }, [authFetch, filters.city, filters.priority]);
 
   useEffect(() => {
-    if (!token) return;
+    if (!token || isLoading) return;
     const timer = window.setTimeout(() => {
       void loadAll();
     }, 0);
     return () => window.clearTimeout(timer);
-  }, [loadAll, token]);
+  }, [loadAll, token, isLoading]);
+
+  useEffect(() => {
+    if (!token || isLoading) return;
+    const hasPending = leads.some(
+      (l) =>
+        l.automation_status === "in_progress" ||
+        l.automation_status_detail === "Queued" ||
+        l.automation_status_detail === "Processing"
+    );
+    if (!hasPending) return;
+
+    const interval = setInterval(() => {
+      void loadAll();
+    }, 3000);
+
+    return () => clearInterval(interval);
+  }, [leads, loadAll, token, isLoading]);
 
   async function submitAuth(event: FormEvent) {
     event.preventDefault();
@@ -202,6 +188,7 @@ export default function Home() {
         authMode === "signup"
           ? {
               method: "POST",
+              headers: { "Content-Type": "application/json" },
               body: JSON.stringify(authForm),
             }
           : {
@@ -216,10 +203,7 @@ export default function Home() {
       const response = await fetch(`${API_BASE}${path}`, init);
       if (!response.ok) throw new Error(await response.text());
       const payload = (await response.json()) as { access_token: string; user: User };
-      setToken(payload.access_token);
-      setUser(payload.user);
-      localStorage.setItem("leadgen_token", payload.access_token);
-      localStorage.setItem("leadgen_user", JSON.stringify(payload.user));
+      login(payload.access_token, payload.user);
       setMessage(`Signed in as ${payload.user.full_name}.`);
     } catch (error) {
       setMessage(error instanceof Error ? error.message : "Auth failed.");
@@ -228,11 +212,8 @@ export default function Home() {
     }
   }
 
-  function logout() {
-    localStorage.removeItem("leadgen_token");
-    localStorage.removeItem("leadgen_user");
-    setToken("");
-    setUser(null);
+  function handleLogout() {
+    logout();
     setLeads([]);
     setBusinesses([]);
     setDashboard(null);
@@ -243,7 +224,7 @@ export default function Home() {
     event.preventDefault();
     setLoading(true);
     try {
-      const result = await api<DiscoveryResult>("/api/v1/discovery/google-maps", {
+      const result = await authFetch<DiscoveryResult>("/api/v1/discovery/google-maps", {
         method: "POST",
         body: JSON.stringify(discovery),
       });
@@ -263,7 +244,7 @@ export default function Home() {
     event.preventDefault();
     setLoading(true);
     try {
-      await api<Business>("/api/v1/businesses", {
+      await authFetch<Business>("/api/v1/businesses", {
         method: "POST",
         body: JSON.stringify({
           ...businessForm,
@@ -286,7 +267,7 @@ export default function Home() {
   async function enrichBusiness(id: string) {
     setLoading(true);
     try {
-      await api<Business>(`/api/v1/businesses/${id}/enrich-website`, { method: "POST" });
+      await authFetch<Business>(`/api/v1/businesses/${id}/enrich-website`, { method: "POST" });
       setMessage("Website scraper enriched the business.");
       await loadAll();
     } catch (error) {
@@ -299,7 +280,7 @@ export default function Home() {
   async function scoreBusiness(id: string) {
     setLoading(true);
     try {
-      await api<Lead>(`/api/v1/businesses/${id}/score`, { method: "POST" });
+      await authFetch<Lead>(`/api/v1/businesses/${id}/score`, { method: "POST" });
       setMessage("Lead scored and added to the leads dashboard.");
       await loadAll();
     } catch (error) {
@@ -313,7 +294,7 @@ export default function Home() {
     event.preventDefault();
     setLoading(true);
     try {
-      const result = await api<Record<string, unknown>>("/website-scraper/scrape", {
+      const result = await authFetch<Record<string, unknown>>("/website-scraper/scrape", {
         method: "POST",
         body: JSON.stringify({ website: scrapeUrl }),
       });
@@ -329,7 +310,16 @@ export default function Home() {
   async function downloadExport(path: string, filename: string) {
     setLoading(true);
     try {
-      const response = await fetch(`${API_BASE}${path}`, { headers });
+      const savedToken = token || (typeof window !== "undefined" ? localStorage.getItem("leadgen_token") : null);
+      const response = await fetch(`${API_BASE}${path}`, {
+        headers: {
+          ...(savedToken ? { Authorization: `Bearer ${savedToken}` } : {}),
+        },
+      });
+      if (response.status === 401) {
+        logout();
+        throw new Error("Session expired. Please log in again.");
+      }
       if (!response.ok) throw new Error(await response.text());
       const blob = await response.blob();
       const url = URL.createObjectURL(blob);
@@ -346,6 +336,21 @@ export default function Home() {
     } finally {
       setLoading(false);
     }
+  }
+
+  // Delay rendering until auth state is restored on client mount to eliminate hydration mismatch
+  if (isLoading) {
+    return (
+      <main className="auth-shell">
+        <section className="auth-panel">
+          <div>
+            <p className="eyebrow">Mart Lead Generator</p>
+            <h1>Loading dashboard...</h1>
+            <p className="muted">Restoring session state...</p>
+          </div>
+        </section>
+      </main>
+    );
   }
 
   if (!token || !user) {
@@ -423,7 +428,7 @@ export default function Home() {
           <strong>{user.full_name}</strong>
           <span>{user.email}</span>
           <span>{user.role}</span>
-          <button onClick={logout}>Logout</button>
+          <button onClick={handleLogout}>Logout</button>
         </div>
       </aside>
 
@@ -469,57 +474,29 @@ export default function Home() {
               </article>
             </div>
 
-            <div className="split">
-              <section className="panel">
-                <h3>Intern progress</h3>
-                <div className="table-wrap">
-                  <table>
-                    <thead>
-                      <tr>
-                        <th>Intern</th>
-                        <th>Cities</th>
-                        <th>Leads</th>
-                        <th>Status</th>
+            <section className="panel" style={{ width: "100%", maxWidth: "800px", margin: "0 auto" }}>
+              <h3>Leads Progress</h3>
+              <div className="table-wrap">
+                <table>
+                  <thead>
+                    <tr>
+                      <th>Cities</th>
+                      <th>Leads</th>
+                      <th>Status</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {(dashboard?.by_intern || []).map((row, index) => (
+                      <tr key={row.cities.join("-") || index}>
+                        <td>{row.cities.join(", ")}</td>
+                        <td>{row.leads_this_week}/{row.target_per_week}</td>
+                        <td><span className={row.on_track ? "pill calm" : "pill warn"}>{row.on_track ? "On Track" : `${row.shortfall} Short`}</span></td>
                       </tr>
-                    </thead>
-                    <tbody>
-                      {(dashboard?.by_intern || []).map((row) => (
-                        <tr key={row.intern}>
-                          <td>{row.intern}</td>
-                          <td>{row.cities.join(", ")}</td>
-                          <td>{row.leads_this_week} / {row.target_per_week}</td>
-                          <td><span className={row.on_track ? "pill calm" : "pill warn"}>{row.on_track ? "On track" : `${row.shortfall} short`}</span></td>
-                        </tr>
-                      ))}
-                    </tbody>
-                  </table>
-                </div>
-              </section>
-
-              <section className="panel">
-                <h3>Country totals</h3>
-                <div className="table-wrap">
-                  <table>
-                    <thead>
-                      <tr>
-                        <th>Country</th>
-                        <th>This week</th>
-                        <th>All time</th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {(dashboard?.by_country || []).map((row) => (
-                        <tr key={row.country}>
-                          <td>{row.country}</td>
-                          <td>{row.leads_this_week}</td>
-                          <td>{row.total_leads}</td>
-                        </tr>
-                      ))}
-                    </tbody>
-                  </table>
-                </div>
-              </section>
-            </div>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </section>
           </section>
         )}
 
@@ -549,11 +526,12 @@ export default function Home() {
                   <thead>
                     <tr>
                       <th>Lead</th>
-                      <th>Business</th>
+                      <th>Business & Owner</th>
                       <th>City</th>
                       <th>Contact</th>
+                      <th>Order & Delivery</th>
                       <th>Priority</th>
-                      <th>Automation</th>
+                      <th>Status & Tech</th>
                     </tr>
                   </thead>
                   <tbody>
@@ -563,14 +541,34 @@ export default function Home() {
                         <td>
                           <strong>{lead.business?.name || lead.business_id}</strong>
                           <span>{fieldValue(lead.business?.business_type)}</span>
+                          {lead.business?.owner_manager_name && (
+                            <span style={{ fontSize: "0.85em", color: "#666" }}>
+                              Owner: {lead.business.owner_manager_name}
+                            </span>
+                          )}
                         </td>
                         <td>{fieldValue(lead.business?.city)}</td>
                         <td>
                           <span>{fieldValue(lead.business?.phone)}</span>
                           <span>{fieldValue(lead.business?.email)}</span>
                         </td>
+                        <td>
+                          <span>{fieldValue(lead.order_method_detail || lead.order_method)}</span>
+                          {lead.delivery_system && (
+                            <span style={{ fontSize: "0.85em", color: "#555" }}>
+                              Delivery: {lead.delivery_system}
+                            </span>
+                          )}
+                        </td>
                         <td><span className={priorityClass(lead.priority)}>{lead.priority}</span></td>
-                        <td>{lead.automation_status_detail || lead.automation_status}</td>
+                        <td>
+                          <strong>{lead.automation_status_detail || lead.automation_status}</strong>
+                          {lead.notes && (
+                            <span style={{ fontSize: "0.8em", color: "#666", display: "block" }}>
+                              {lead.notes}
+                            </span>
+                          )}
+                        </td>
                       </tr>
                     ))}
                   </tbody>

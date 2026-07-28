@@ -221,6 +221,8 @@ class GoogleMapsBot:
             address = await self._get_field_by_item_id(detail_page, "address", label_prefix="Address: ")
             phone = await self._get_field_by_item_id(detail_page, "phone", label_prefix="Phone: ")
 
+            parsed_city, parsed_country = self._parse_address_components(address, city, country)
+
             website = None
             try:
                 website = await detail_page.locator('a[data-item-id="authority"]').first.get_attribute("href")
@@ -233,8 +235,8 @@ class GoogleMapsBot:
                 name=name,
                 category=category,
                 address=address,
-                city=city,
-                country=country,
+                city=parsed_city,
+                country=parsed_country,
                 phone=phone,
                 website=website,
                 google_rating=rating,
@@ -277,6 +279,31 @@ class GoogleMapsBot:
     def _parse_place_id(place_url: str) -> Optional[str]:
         match = re.search(r"!1s([^!]+)", place_url)
         return match.group(1) if match else None
+
+    @staticmethod
+    def _parse_address_components(address: Optional[str], fallback_city: str, fallback_country: Optional[str]) -> Tuple[str, Optional[str]]:
+        if not address:
+            return fallback_city, fallback_country
+
+        parts = [p.strip() for p in address.split(",") if p.strip()]
+        if not parts:
+            return fallback_city, fallback_country
+
+        parsed_country = fallback_country
+        parsed_city = fallback_city
+
+        last_part = parts[-1]
+        if any(c in last_part.lower() for c in ["uk", "united kingdom", "pakistan", "usa", "united states", "us", "uae"]):
+            parsed_country = last_part
+
+        if len(parts) >= 2:
+            city_candidate = parts[-2]
+            city_candidate = re.sub(r'[A-Z0-9]{2,4}\s?[A-Z0-9]{2,4}', '', city_candidate, flags=re.I).strip()
+            city_candidate = re.sub(r'\b\d{5}\b', '', city_candidate).strip()
+            if city_candidate and len(city_candidate) > 2:
+                parsed_city = city_candidate
+
+        return parsed_city, parsed_country
 
 
 # ---------------------------------------------------------------------------
