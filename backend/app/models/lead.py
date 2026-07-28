@@ -82,7 +82,10 @@ class Lead(Base):
     # ISO week the lead was generated in, for the weekly-target report.
     week_number = Column(Integer, nullable=True, index=True)
 
-    synced_to_sheets = Column(DateTime, nullable=True)  # timestamp of last successful export
+    # Timestamp of the last successful export. Was named synced_to_sheets when
+    # the plan was a Google Sheets API push; renamed when the team settled on
+    # CSV files, since nothing syncs to Sheets any more.
+    exported_at = Column(DateTime, nullable=True)
 
     created_at = Column(DateTime, default=datetime.utcnow)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)

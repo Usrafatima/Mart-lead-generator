@@ -24,18 +24,11 @@ class Settings(BaseSettings):
     # --- Redis / Celery ---
     REDIS_URL: str = "redis://redis:6379/0"
 
-    # --- Google Sheets (only referenced here, actual sync logic lives in the
-    # Database & Sheets module, but the backend needs the id to trigger jobs) ---
-    GOOGLE_SHEETS_SPREADSHEET_ID: str = ""
-    GOOGLE_SERVICE_ACCOUNT_JSON_PATH: str = ""
-    # Tab the weekly export writes to.
-    GOOGLE_SHEETS_WORKSHEET: str = "Leads"
-    # Separate tab for the weekly dashboard, which is fully rebuilt each run.
-    GOOGLE_SHEETS_DASHBOARD_WORKSHEET: str = "Weekly Dashboard"
-    # Force the export to log rows instead of writing them. Leave False: the
-    # export already falls back to dry run on its own when credentials are
-    # missing. This is for deliberately rehearsing a run against a real setup.
-    SHEETS_DRY_RUN: bool = False
+    # --- Exports (Database & Sheets module) ---
+    # Folder the scheduled CSV exports are written to. The team opens these in
+    # Excel or uploads them to Google Sheets by hand; the Sheets API was ruled
+    # out because it needs a Google Cloud service account.
+    EXPORT_DIR: str = "exports"
 
 
 settings = Settings()

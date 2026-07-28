@@ -1,4 +1,4 @@
-"""Tests for row mapping, CSV export and the Google Sheets sync."""
+"""Tests for row mapping, CSV export, and the scheduled export job."""
 
 import csv
 import io
@@ -8,9 +8,9 @@ import pytest
 
 from app.models.business import Business
 from app.models.lead import AutomationStatus, CallStatus, Lead, LeadPriority, OrderMethod
+from app.models.sync_run import SyncRun, SyncStatus, SyncTarget
 from app.services.csv_export import leads_to_csv, query_leads_for_export
 from app.services.export_mapping import SHEET_COLUMNS, lead_to_row
-from app.services.sheets_client import DryRunSheet, _column_letter
 
 
 @pytest.fixture()
@@ -147,113 +147,141 @@ def test_export_filters_by_city_and_priority(seeded_lead, db):
     assert len(query_leads_for_export(db, priority=LeadPriority.high)) == 0
 
 
-# --- Sheets sync -----------------------------------------------------------
 
-def test_sync_writes_header_and_rows(seeded_lead, db, monkeypatch):
-    from app.services import sheets_sync
+# --- scheduled export job --------------------------------------------------
 
-    sheet = DryRunSheet()
-    monkeypatch.setattr(sheets_sync, "open_worksheet", lambda *a, **kw: sheet)
+@pytest.fixture()
+def export_dir(tmp_path, monkeypatch):
+    """Point the export directory at a throwaway folder for the test."""
+    from app.core.config import settings
 
-    result = sheets_sync.sync_leads_to_sheets(db=db, triggered_by="pytest")
+    monkeypatch.setattr(settings, "EXPORT_DIR", str(tmp_path / "exports"))
+    return tmp_path / "exports"
+
+
+def test_weekly_job_writes_a_lead_file(seeded_lead, db, export_dir):
+    from app.services.scheduled_export import export_leads_csv
+
+    result = export_leads_csv(db=db, week_number=30, triggered_by="pytest")
 
     assert result["status"] == "success"
     assert result["rows_written"] == 1
-    assert sheet.header == list(SHEET_COLUMNS)
+
+    path = export_dir / "leads_week30.csv"
+    assert path.exists()
+
+    rows = list(csv.reader(io.StringIO(path.read_text(encoding="utf-8-sig"))))
+    assert rows[0] == list(SHEET_COLUMNS)
+    assert rows[1][1] == "Wai Yee Hong Chinese Supermarket"
 
 
-def test_sync_updates_instead_of_duplicating_an_existing_row(seeded_lead, db, monkeypatch):
-    from app.services import sheets_sync
+def test_lead_file_is_named_by_week_so_reruns_overwrite(seeded_lead, db, export_dir):
+    from app.services.scheduled_export import export_leads_csv
 
-    # Sheet already contains Lead ID 3 at row 2 (row 1 is the header).
-    sheet = DryRunSheet(existing_ids=["Lead ID", "3"])
-    monkeypatch.setattr(sheets_sync, "open_worksheet", lambda *a, **kw: sheet)
+    export_leads_csv(db=db, week_number=30, triggered_by="pytest")
+    export_leads_csv(db=db, week_number=30, triggered_by="pytest")
 
-    result = sheets_sync.sync_leads_to_sheets(db=db, triggered_by="pytest")
-
-    assert result["rows_written"] == 0
-    assert result["rows_updated"] == 1
-    assert sheet.appended == []
-    assert 2 in sheet.updated
+    # Two runs of the same week must not leave two near-identical files.
+    assert [p.name for p in sorted(export_dir.glob("leads_week*.csv"))] == ["leads_week30.csv"]
 
 
-def test_sync_is_idempotent_across_two_runs(seeded_lead, db, monkeypatch):
-    """Re-running the weekly job must not duplicate rows in the sheet."""
-    from app.services import sheets_sync
+def test_city_filter_gets_its_own_file(seeded_lead, db, export_dir):
+    from app.services.scheduled_export import export_leads_csv
 
-    written: list[list[str]] = []
+    result = export_leads_csv(db=db, week_number=30, city="Bristol", triggered_by="pytest")
 
-    class _Recording(DryRunSheet):
-        def read_column(self, col):
-            # Emulate a real sheet: what was appended is there next time.
-            return ["Lead ID"] + [row[0] for row in written]
-
-        def append_rows(self, rows):
-            written.extend(rows)
-
-    sheet = _Recording()
-    monkeypatch.setattr(sheets_sync, "open_worksheet", lambda *a, **kw: sheet)
-
-    first = sheets_sync.sync_leads_to_sheets(db=db, triggered_by="pytest")
-    second = sheets_sync.sync_leads_to_sheets(db=db, triggered_by="pytest")
-
-    assert first["rows_written"] == 1
-    assert second["rows_written"] == 0
-    assert len(written) == 1
+    assert (export_dir / "leads_week30_bristol.csv").exists()
+    assert result["rows_written"] == 1
 
 
-def test_sync_marks_leads_as_synced_and_records_a_run(seeded_lead, db, monkeypatch):
-    from app.models.sync_run import SyncRun, SyncStatus
-    from app.services import sheets_sync
+def test_export_stamps_leads_and_records_a_run(seeded_lead, db, export_dir):
+    from app.services.scheduled_export import export_leads_csv
 
-    monkeypatch.setattr(sheets_sync, "open_worksheet", lambda *a, **kw: DryRunSheet())
-    sheets_sync.sync_leads_to_sheets(db=db, triggered_by="pytest")
+    export_leads_csv(db=db, week_number=30, triggered_by="pytest")
 
     db.refresh(seeded_lead)
-    assert seeded_lead.synced_to_sheets is not None
+    assert seeded_lead.exported_at is not None
 
     run = db.query(SyncRun).one()
     assert run.status == SyncStatus.success
+    assert run.target == SyncTarget.csv
     assert run.triggered_by == "pytest"
     assert run.rows_written == 1
+    assert run.worksheet == "leads_week30.csv"
 
 
-def test_sync_records_failure_instead_of_swallowing_it(seeded_lead, db, monkeypatch):
-    from app.models.sync_run import SyncRun, SyncStatus
-    from app.services import sheets_sync
+def test_only_unsynced_skips_already_exported_leads(seeded_lead, db, export_dir):
+    from app.services.scheduled_export import export_leads_csv
+
+    export_leads_csv(db=db, week_number=30, triggered_by="pytest")
+    second = export_leads_csv(db=db, week_number=30, only_unsynced=True, triggered_by="pytest")
+
+    assert second["rows_written"] == 0
+
+
+def test_failure_is_recorded_instead_of_swallowed(seeded_lead, db, export_dir, monkeypatch):
+    from app.services import scheduled_export
 
     def _boom(*args, **kwargs):
-        raise RuntimeError("Google API quota exceeded")
+        raise OSError("disk full")
 
-    monkeypatch.setattr(sheets_sync, "open_worksheet", _boom)
+    monkeypatch.setattr(scheduled_export, "_write_csv", _boom)
 
-    with pytest.raises(RuntimeError):
-        sheets_sync.sync_leads_to_sheets(db=db, triggered_by="pytest")
+    with pytest.raises(OSError):
+        scheduled_export.export_leads_csv(db=db, week_number=30, triggered_by="pytest")
 
+    # The 06:00 Monday job runs unattended; a silent failure would look
+    # identical to a week with no leads.
     run = db.query(SyncRun).order_by(SyncRun.started_at.desc()).first()
     assert run.status == SyncStatus.failed
-    assert "quota" in run.error
+    assert "disk full" in run.error
 
 
-def test_skips_leads_with_no_lead_ref(db, monkeypatch):
-    from app.services import sheets_sync
+def test_dashboard_file_is_written(seeded_lead, db, export_dir):
+    from app.services.scheduled_export import export_dashboard_csv
 
-    business = Business(name="No Ref", city="Bristol")
-    db.add(business)
-    db.flush()
-    db.add(Lead(business_id=business.id, lead_ref=None))
-    db.commit()
+    result = export_dashboard_csv(db=db, week_number=30, triggered_by="pytest")
 
-    sheet = DryRunSheet()
-    monkeypatch.setattr(sheets_sync, "open_worksheet", lambda *a, **kw: sheet)
+    assert result["status"] == "success"
+    assert result["total_leads_this_week"] == 1
 
-    result = sheets_sync.sync_leads_to_sheets(db=db, triggered_by="pytest")
+    path = export_dir / "dashboard_week30.csv"
+    assert path.exists()
 
-    # Exporting it would create a row we could never match again next run.
-    assert result["rows_skipped"] == 1
-    assert result["rows_written"] == 0
+    text = path.read_text(encoding="utf-8-sig")
+    assert "Weekly Lead Generation Dashboard" in text
+    assert "Leads by Intern (this week)" in text
+    assert "Haifa" in text
 
 
-@pytest.mark.parametrize("index,letter", [(1, "A"), (22, "V"), (26, "Z"), (27, "AA")])
-def test_column_letter(index, letter):
-    assert _column_letter(index) == letter
+def test_weekly_run_produces_both_files(seeded_lead, db, export_dir, monkeypatch):
+    from app.services import scheduled_export
+
+    # run_weekly_export opens its own session; point it at the test's.
+    monkeypatch.setattr(scheduled_export, "SessionLocal", lambda: db)
+    monkeypatch.setattr(db, "close", lambda: None)
+
+    result = scheduled_export.run_weekly_export(triggered_by="pytest")
+
+    assert result["leads"]["status"] == "success"
+    assert result["dashboard"]["status"] == "success"
+    assert len(list(export_dir.glob("*.csv"))) == 2
+
+
+def test_export_directory_is_created_if_missing(db, export_dir):
+    from app.services.scheduled_export import export_directory
+
+    assert not export_dir.exists()
+    assert export_directory() == export_dir
+    assert export_dir.exists()
+
+
+def test_files_are_written_with_a_bom_for_excel(seeded_lead, db, export_dir):
+    from app.services.scheduled_export import export_leads_csv
+
+    export_leads_csv(db=db, week_number=30, triggered_by="pytest")
+
+    raw = (export_dir / "leads_week30.csv").read_bytes()
+    # Without the BOM, Excel on Windows falls back to the system codepage and
+    # mangles accented and Arabic business names.
+    assert raw.startswith(b"\xef\xbb\xbf")
