@@ -153,16 +153,19 @@ In `app/workers/celery_worker.py`:
 
 | Job | When | Writes |
 |---|---|---|
-| `export_leads_csv` | Mondays 06:00 UTC | `exports/leads_week<NN>.csv` |
+| `export_leads_csv` | daily 06:00 UTC | `exports/leads_week<NN>.csv` |
 | `export_dashboard_csv` | daily 06:15 UTC | `exports/dashboard_week<NN>.csv` |
 
 Files are named by ISO week, not by timestamp, so re-running the same week
 overwrites rather than piling up near-identical files.
 
-The Monday schedule was written by the backend module; this module filled in
-the task body it was calling and added the dashboard job. The dashboard runs
-daily rather than weekly because a progress report six days stale can't be
-acted on.
+Both jobs run **daily**, but the output is still one file per week — which is
+the weekly artefact the requirement asks for. Running daily just means the
+current week's file is never more than a day old; a Monday-only schedule left
+it six days stale by Sunday, which is no use for chasing targets mid-week.
+
+The original Monday 06:00 schedule was written by the backend module; this
+module filled in the task body it was calling.
 
 Output goes to `EXPORT_DIR` (default `backend/exports/`, gitignored — it's
 generated output, not source).

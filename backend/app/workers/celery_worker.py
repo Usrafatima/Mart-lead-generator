@@ -17,17 +17,22 @@ celery_app.conf.update(
     enable_utc=True,
 )
 
-# Weekly export, per the "Export / Schedule weekly jobs" requirement from the
-# Database & Sheets module. Runs every Monday at 06:00 UTC. Adjust the
-# day/hour here if the team wants a different schedule — no code changes
+# Scheduled exports, per the "Export / Schedule weekly jobs" requirement from
+# the Database & Sheets module.
+#
+# Both run daily rather than weekly. The output is still one file per ISO week
+# (leads_week31.csv), so the weekly artefact the team asked for is exactly what
+# they get — a daily run just keeps the current week's file up to date instead
+# of leaving it six days stale. Re-running overwrites the same filename, so
+# nothing piles up.
+#
+# Adjust the hour here if the team wants a different time; no code changes are
 # needed elsewhere.
 celery_app.conf.beat_schedule = {
-    "weekly-csv-export": {
+    "daily-leads-export": {
         "task": "export_leads_csv",
-        "schedule": crontab(day_of_week="monday", hour=6, minute=0),
+        "schedule": crontab(hour=6, minute=0),
     },
-    # The dashboard is also refreshed daily, because a progress report that's
-    # six days stale can't be acted on.
     "daily-dashboard-export": {
         "task": "export_dashboard_csv",
         "schedule": crontab(hour=6, minute=15),
