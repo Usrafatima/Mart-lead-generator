@@ -2,10 +2,9 @@ import uuid
 from datetime import datetime
 
 from sqlalchemy import Column, String, DateTime, Float, Integer, Boolean, ForeignKey, Index
-from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import relationship
 
-from app.core.database import Base
+from app.core.database import Base, GUID
 
 
 class Business(Base):
@@ -17,7 +16,7 @@ class Business(Base):
 
     __tablename__ = "businesses"
 
-    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    id = Column(GUID(), primary_key=True, default=uuid.uuid4)
 
     name = Column(String, nullable=False, index=True)
     city = Column(String, index=True)
@@ -66,7 +65,7 @@ class Business(Base):
     # Points at the record this one duplicates. We keep duplicates instead of
     # deleting them so a wrong merge can be undone, and so we can show the
     # bots' raw output during QA. Exports filter on is_duplicate == False.
-    duplicate_of_id = Column(UUID(as_uuid=True), ForeignKey("businesses.id"), nullable=True)
+    duplicate_of_id = Column(GUID(), ForeignKey("businesses.id"), nullable=True)
 
     source_bot = Column(String, nullable=True)  # e.g. "google_maps_bot"
     # Which intern/city assignment this came from, for the weekly target report.

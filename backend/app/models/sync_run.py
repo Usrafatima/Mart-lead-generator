@@ -3,9 +3,8 @@ import enum
 from datetime import datetime
 
 from sqlalchemy import Column, String, DateTime, Integer, Text, Enum
-from sqlalchemy.dialects.postgresql import UUID
 
-from app.core.database import Base
+from app.core.database import Base, GUID
 
 
 class SyncStatus(str, enum.Enum):
@@ -34,7 +33,7 @@ class SyncRun(Base):
 
     __tablename__ = "sync_runs"
 
-    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    id = Column(GUID(), primary_key=True, default=uuid.uuid4)
 
     target = Column(Enum(SyncTarget), nullable=False, default=SyncTarget.csv)
     status = Column(Enum(SyncStatus), nullable=False, default=SyncStatus.running)
