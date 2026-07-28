@@ -15,8 +15,11 @@ class SyncStatus(str, enum.Enum):
 
 
 class SyncTarget(str, enum.Enum):
-    google_sheets = "google_sheets"
     csv = "csv"
+    # Kept only so historical rows stay readable. The team chose CSV files
+    # over the Sheets API, which would have needed a Google Cloud service
+    # account. Nothing writes this value any more.
+    google_sheets = "google_sheets"
 
 
 class SyncRun(Base):
@@ -24,21 +27,23 @@ class SyncRun(Base):
     One row per export attempt (weekly Celery job or manual trigger).
 
     Exists because the weekly job runs unattended at 06:00 Monday — without a
-    record of what happened there's no way to tell "the sheet is empty because
-    the sync failed" from "the sheet is empty because there were no new leads".
+    record of what happened there's no way to tell "the file is missing
+    because the export failed" from "the file is missing because there were no
+    new leads".
     """
 
     __tablename__ = "sync_runs"
 
     id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
 
-    target = Column(Enum(SyncTarget), nullable=False, default=SyncTarget.google_sheets)
+    target = Column(Enum(SyncTarget), nullable=False, default=SyncTarget.csv)
     status = Column(Enum(SyncStatus), nullable=False, default=SyncStatus.running)
 
     # "celery_beat" for the scheduled run, or the email of whoever clicked
     # Export in the dashboard.
     triggered_by = Column(String, nullable=True)
-    worksheet = Column(String, nullable=True)  # tab name, or output path for CSV
+    # Name of the file this run produced.
+    worksheet = Column(String, nullable=True)
 
     rows_written = Column(Integer, default=0, nullable=False)
     rows_updated = Column(Integer, default=0, nullable=False)

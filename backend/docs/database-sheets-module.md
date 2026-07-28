@@ -1,9 +1,16 @@
-# Database & Google Sheets Integration
+# Database & Export Integration
 
+Assigned as **"Database & Google Sheets Integration"**.
 Module owner: **Haifa** (Bristol + Dubai)
 
-Covers the four tasks assigned to this role: design the database, store leads,
-remove duplicates, export to Google Sheets, and schedule the weekly job.
+Covers the five tasks assigned to this role: design the database, store leads,
+remove duplicates, export the leads, and schedule the weekly job.
+
+> **Why it's CSV and not the Sheets API:** pushing to Google Sheets needs a
+> Google Cloud service account, and the team decided against setting one up.
+> Exports are **CSV files** instead — same 22 columns, same data, same
+> schedule, opened directly in Excel or uploaded to Sheets by hand. Nothing
+> else about the module changed.
 
 ---
 
@@ -16,19 +23,18 @@ remove duplicates, export to Google Sheets, and schedule the weekly job.
 | `app/models/sync_run.py` | Audit row per export attempt |
 | `app/core/assignments.py` | Who covers which cities, and the weekly targets |
 | `app/services/dedup.py` | Duplicate detection and the `upsert_business()` entry point |
-| `app/services/export_mapping.py` | The single definition of the sheet's columns |
-| `app/services/sheets_client.py` | Google Sheets wrapper + dry-run backend |
-| `app/services/sheets_sync.py` | The leads export and the dashboard export |
-| `app/services/csv_export.py` | CSV download for the dashboard |
-| `app/services/importer.py` | Loads hand-filled .csv/.xlsx sheets into Postgres |
+| `app/services/export_mapping.py` | The single definition of the export's columns |
+| `app/services/csv_export.py` | Builds the CSV, on demand and for download |
+| `app/services/scheduled_export.py` | The weekly job: writes the CSV files to disk |
+| `app/services/importer.py` | One-off migration of hand-filled .csv/.xlsx sheets |
 | `app/services/discovery_ingest.py` | Bridge from the Google Maps bot into the database |
 | `app/services/reports.py` | Weekly Lead Generation Dashboard |
 | `app/api/v1/exports.py` | `/api/v1/exports/*` endpoints |
 | `app/api/v1/reports.py` | `/api/v1/reports/*` endpoints |
-| `scripts/import_leads.py` | CLI wrapper around the importer |
 | `scripts/discover_leads.py` | Scrape a city straight into the database |
-| `scripts/check_sheets_setup.py` | Verifies Google credentials, step by step |
-| `alembic/versions/9c41e07b52d3_*.py` | Migration for all of the above |
+| `scripts/import_leads.py` | CLI wrapper around the one-off importer |
+| `alembic/versions/9c41e07b52d3_*.py` | Schema, dedup keys, sync_runs |
+| `alembic/versions/c7d2f1a4be90_*.py` | CSV-only rename of the export timestamp |
 
 ---
 
@@ -118,43 +124,48 @@ backfill_duplicates(db)   # or the backfill_duplicate_businesses Celery task
 
 ## Export
 
-Both exports share `export_mapping.SHEET_COLUMNS`, so CSV and Sheets can never
-drift into different column orders.
+Everything exports as CSV, and every path shares
+`export_mapping.SHEET_COLUMNS`, so the on-demand download, the scheduled file
+and the dashboard can never drift into different column orders.
 
-The Sheets export is an **idempotent upsert keyed on Lead ID**, not an append.
-Re-running the weekly job, or clicking Export twice, updates existing rows
-instead of duplicating them — which also means edits made since the last run
-get picked up.
+Files are written with a UTF-8 BOM. Without it Excel on Windows falls back to
+the system codepage and mangles accented and Arabic business names.
 
 | Endpoint | Who | Does |
 |---|---|---|
-| `GET /api/v1/exports/csv` | any logged-in user | CSV download, honours the dashboard's filters |
-| `POST /api/v1/exports/sheets` | owner only | queues a Sheets export now |
+| `GET /api/v1/exports/csv` | any logged-in user | immediate CSV download, honours the dashboard's filters |
+| `POST /api/v1/exports/weekly-file` | owner only | queues the weekly file now, instead of waiting for Monday |
 | `GET /api/v1/exports/runs` | any logged-in user | export history — this is how you check Monday's job ran |
-| `GET /api/v1/reports/weekly` | any logged-in user | the full weekly dashboard |
+| `GET /api/v1/reports/weekly` | any logged-in user | the full weekly dashboard as JSON |
+| `GET /api/v1/reports/weekly/csv` | any logged-in user | the dashboard as a CSV download |
 | `GET /api/v1/reports/weekly/interns` | any logged-in user | just the per-intern progress table |
 | `GET /api/v1/reports/assignments` | any logged-in user | intern → cities mapping and targets |
-| `POST /api/v1/reports/weekly/sync-to-sheets` | owner only | rebuilds the dashboard tab |
 
-The Sheets export is queued through Celery rather than run inline: a full
-export can take a minute against Google's API and would otherwise hold the
-HTTP request open until the browser times out. It retries at 60s / 120s / 240s,
-because the usual failure is a transient quota error and the next scheduled
+`GET /exports/csv` streams inline for an instant download.
+`POST /exports/weekly-file` is queued through Celery instead, because writing
+every lead to disk would otherwise hold the HTTP request open. It retries at
+60s / 120s / 240s, since the usual failure is transient and the next scheduled
 attempt is a week away.
 
 ### Scheduled jobs
 
 In `app/workers/celery_worker.py`:
 
-| Job | When | Does |
+| Job | When | Writes |
 |---|---|---|
-| `sync_leads_to_sheets` | Mondays 06:00 UTC | full leads export |
-| `sync_dashboard_to_sheets` | daily 06:15 UTC | rebuilds the dashboard tab |
+| `export_leads_csv` | Mondays 06:00 UTC | `exports/leads_week<NN>.csv` |
+| `export_dashboard_csv` | daily 06:15 UTC | `exports/dashboard_week<NN>.csv` |
+
+Files are named by ISO week, not by timestamp, so re-running the same week
+overwrites rather than piling up near-identical files.
 
 The Monday schedule was written by the backend module; this module filled in
 the task body it was calling and added the dashboard job. The dashboard runs
 daily rather than weekly because a progress report six days stale can't be
 acted on.
+
+Output goes to `EXPORT_DIR` (default `backend/exports/`, gitignored — it's
+generated output, not source).
 
 ---
 
@@ -197,13 +208,8 @@ Add the city to `INTERNS` in `app/core/assignments.py` so its leads count
 towards someone's weekly target; otherwise the script warns and the leads are
 stored unattributed.
 
-Needs Playwright browsers: `playwright install chromium`.
-
-### Without credentials
-
-The export falls back to dry-run: it runs the full pipeline and logs every row
-it would have written, instead of crash-looping in Celery. See
-[google-sheets-setup.md](google-sheets-setup.md) to switch it on for real.
+Needs Playwright browsers: `playwright install chromium`. Note the project's
+Dockerfile doesn't install them yet — that's the scraping module's file.
 
 ---
 

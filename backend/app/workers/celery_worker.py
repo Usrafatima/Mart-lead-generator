@@ -17,74 +17,64 @@ celery_app.conf.update(
     enable_utc=True,
 )
 
-# Weekly Google Sheets export, per the "Export to Google Sheets / Schedule
-# weekly jobs" requirement from the Database & Sheets module. Runs every
-# Monday at 06:00 UTC. Adjust the day/hour here if the team wants a
-# different schedule — no code changes needed elsewhere.
+# Weekly export, per the "Export / Schedule weekly jobs" requirement from the
+# Database & Sheets module. Runs every Monday at 06:00 UTC. Adjust the
+# day/hour here if the team wants a different schedule — no code changes
+# needed elsewhere.
 celery_app.conf.beat_schedule = {
-    "weekly-sheets-sync": {
-        "task": "sync_leads_to_sheets",
+    "weekly-csv-export": {
+        "task": "export_leads_csv",
         "schedule": crontab(day_of_week="monday", hour=6, minute=0),
     },
-    # Dashboard rebuild, 15 minutes after the leads export so it reflects the
-    # rows that run just wrote. Also refreshed daily at 06:15, because a
-    # progress report that's six days stale can't be acted on.
-    "daily-dashboard-sync": {
-        "task": "sync_dashboard_to_sheets",
+    # The dashboard is also refreshed daily, because a progress report that's
+    # six days stale can't be acted on.
+    "daily-dashboard-export": {
+        "task": "export_dashboard_csv",
         "schedule": crontab(hour=6, minute=15),
     },
 }
 
 
-@celery_app.task(name="sync_leads_to_sheets", bind=True, max_retries=3)
-def sync_leads_to_sheets_task(
+@celery_app.task(name="export_leads_csv", bind=True, max_retries=3)
+def export_leads_csv_task(
     self,
-    worksheet=None,
     city=None,
     only_unsynced=False,
+    week_number=None,
     triggered_by="celery_beat",
 ):
     """
-    Run the Google Sheets export.
+    Write the weekly lead CSV.
 
-    Retries on failure with exponential backoff, because the usual cause is a
-    transient Google API quota/timeout rather than bad data — and the next
-    scheduled attempt is a week away.
+    Retries with backoff: the usual cause of failure is a transient database
+    or disk problem rather than bad data, and the next scheduled attempt is a
+    week away.
 
-    Imported inside the function so the worker doesn't pull SQLAlchemy and the
-    Google client in at module import time.
+    Imported inside the function so the worker doesn't pull SQLAlchemy in at
+    module import time.
     """
-    from app.services.sheets_sync import sync_leads_to_sheets
+    from app.services.scheduled_export import export_leads_csv
 
     try:
-        return sync_leads_to_sheets(
-            worksheet=worksheet,
+        return export_leads_csv(
             city=city,
             only_unsynced=only_unsynced,
+            week_number=week_number,
             triggered_by=triggered_by,
         )
     except Exception as exc:
         # 60s, 120s, 240s. The failure is already recorded as a SyncRun row,
-        # so a permanently failing export is visible in the dashboard.
+        # so a permanently failing export stays visible.
         raise self.retry(exc=exc, countdown=60 * (2 ** self.request.retries))
 
 
-@celery_app.task(name="sync_dashboard_to_sheets", bind=True, max_retries=3)
-def sync_dashboard_to_sheets_task(
-    self,
-    worksheet=None,
-    week_number=None,
-    triggered_by="celery_beat",
-):
-    """Rebuild the Weekly Dashboard tab in Google Sheets."""
-    from app.services.sheets_sync import sync_dashboard_to_sheets
+@celery_app.task(name="export_dashboard_csv", bind=True, max_retries=3)
+def export_dashboard_csv_task(self, week_number=None, triggered_by="celery_beat"):
+    """Write the weekly dashboard CSV."""
+    from app.services.scheduled_export import export_dashboard_csv
 
     try:
-        return sync_dashboard_to_sheets(
-            worksheet=worksheet,
-            week_number=week_number,
-            triggered_by=triggered_by,
-        )
+        return export_dashboard_csv(week_number=week_number, triggered_by=triggered_by)
     except Exception as exc:
         raise self.retry(exc=exc, countdown=60 * (2 ** self.request.retries))
 

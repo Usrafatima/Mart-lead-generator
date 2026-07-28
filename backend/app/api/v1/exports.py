@@ -1,9 +1,9 @@
 """
 Export endpoints — what the dashboard's "Export options" buttons call.
 
-The Google Sheets sync is queued through Celery rather than run inline: a full
-export can take a minute against Google's API and would otherwise hold the
-HTTP request open until the browser times out.
+Everything exports as CSV. The team chose files over the Google Sheets API,
+which would have required a Google Cloud service account; the CSV opens
+directly in Excel or uploads to Sheets by hand.
 """
 
 from __future__ import annotations
@@ -34,6 +34,7 @@ class SyncRunOut(BaseModel):
     target: SyncTarget
     status: SyncStatus
     triggered_by: Optional[str] = None
+    # Name of the file the run produced.
     worksheet: Optional[str] = None
     rows_written: int
     rows_updated: int
@@ -46,7 +47,7 @@ class SyncRunOut(BaseModel):
         from_attributes = True
 
 
-class SheetsSyncQueued(BaseModel):
+class ExportQueued(BaseModel):
     task_id: Optional[str] = None
     queued: bool
     detail: str
@@ -81,25 +82,29 @@ def export_csv(
     )
 
 
-@router.post("/sheets", response_model=SheetsSyncQueued)
-def trigger_sheets_sync(
-    worksheet: Optional[str] = None,
+@router.post("/weekly-file", response_model=ExportQueued)
+def trigger_weekly_file_export(
     city: Optional[str] = None,
     only_unsynced: bool = False,
+    week_number: Optional[int] = Query(default=None, ge=1, le=53),
     current_user=Depends(require_owner),
 ):
     """
-    Queue a Google Sheets export now, instead of waiting for Monday's job.
+    Write the weekly CSV file now, instead of waiting for Monday's job.
 
-    Owner-only: it writes to a shared spreadsheet the whole team reads.
+    Owner-only: it writes into the shared export folder the whole team reads.
+
+    Queued through Celery rather than run inline — a full export of every lead
+    would otherwise hold the HTTP request open. For an immediate download, use
+    GET /api/v1/exports/csv instead.
     """
-    from app.workers.celery_worker import sync_leads_to_sheets_task
+    from app.workers.celery_worker import export_leads_csv_task
 
     try:
-        task = sync_leads_to_sheets_task.delay(
-            worksheet=worksheet,
+        task = export_leads_csv_task.delay(
             city=city,
             only_unsynced=only_unsynced,
+            week_number=week_number,
             triggered_by=current_user.email,
         )
     except Exception as exc:
@@ -110,7 +115,7 @@ def trigger_sheets_sync(
             detail=f"Could not queue export (is Redis running?): {exc}",
         ) from exc
 
-    return SheetsSyncQueued(
+    return ExportQueued(
         task_id=task.id,
         queued=True,
         detail="Export queued. Check GET /api/v1/exports/runs for the result.",

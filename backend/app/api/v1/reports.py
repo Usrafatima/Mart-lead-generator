@@ -2,15 +2,18 @@
 Reporting endpoints — the Weekly Lead Generation Dashboard.
 
 Returns plain JSON so the Next.js dashboard can render the stat tiles and
-tables directly, and so the same numbers can be pushed to the Google Sheets
-dashboard tab without computing them twice.
+tables directly, plus a CSV download of the same numbers laid out the way the
+team's spreadsheet reads.
 """
 
 from __future__ import annotations
 
+import csv
+import io
 from typing import Optional
 
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, Query
+from fastapi.responses import StreamingResponse
 from sqlalchemy.orm import Session
 
 from app.core.assignments import (
@@ -21,8 +24,12 @@ from app.core.assignments import (
     per_intern_target,
 )
 from app.core.database import get_db
-from app.deps import get_current_user, require_owner
-from app.services.reports import build_weekly_dashboard, current_week_number
+from app.deps import get_current_user
+from app.services.reports import (
+    build_weekly_dashboard,
+    current_week_number,
+    dashboard_to_rows,
+)
 
 router = APIRouter(prefix="/api/v1/reports", tags=["reports"])
 
@@ -87,31 +94,30 @@ def assignments(current_user=Depends(get_current_user)):
     }
 
 
-@router.post("/weekly/sync-to-sheets")
-def push_dashboard_to_sheets(
+@router.get("/weekly/csv")
+def weekly_dashboard_csv(
     week_number: Optional[int] = Query(default=None, ge=1, le=53),
-    worksheet: Optional[str] = None,
-    current_user=Depends(require_owner),
+    db: Session = Depends(get_db),
+    current_user=Depends(get_current_user),
 ):
     """
-    Rebuild the Google Sheets dashboard tab now.
+    Download the dashboard as a CSV, laid out the way the team's sheet reads.
 
-    Owner-only, and queued through Celery for the same reason as the leads
-    export — it's a network round trip to Google, not something to block an
-    HTTP request on.
+    Generated inline rather than queued: it's a handful of aggregate rows, so
+    there's nothing to wait for.
     """
-    from app.workers.celery_worker import sync_dashboard_to_sheets_task
+    dashboard = build_weekly_dashboard(db, week_number=week_number)
+    rows = dashboard_to_rows(dashboard)
 
-    try:
-        task = sync_dashboard_to_sheets_task.delay(
-            worksheet=worksheet,
-            week_number=week_number,
-            triggered_by=current_user.email,
-        )
-    except Exception as exc:
-        raise HTTPException(
-            status_code=503,
-            detail=f"Could not queue dashboard sync (is Redis running?): {exc}",
-        ) from exc
+    buffer = io.StringIO()
+    csv.writer(buffer, lineterminator="\r\n").writerows(rows)
 
-    return {"task_id": task.id, "queued": True, "detail": "Dashboard sync queued."}
+    return StreamingResponse(
+        iter([buffer.getvalue()]),
+        media_type="text/csv",
+        headers={
+            "Content-Disposition": (
+                f'attachment; filename="dashboard_week{dashboard.week_number:02d}.csv"'
+            )
+        },
+    )
